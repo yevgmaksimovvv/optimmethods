@@ -5,11 +5,9 @@ from typing import Dict, List, Optional, Tuple
 
 if __package__:
     from .app_models import IterationRow, MethodSpec, SearchResult
-    from .function_defs import f1, f2
     from .logging_setup import configure_logging
 else:
     from app_models import IterationRow, MethodSpec, SearchResult
-    from function_defs import f1, f2
     from logging_setup import configure_logging
 
 
@@ -51,7 +49,7 @@ def sanitize_interval(
         if a < point < b:
             raise ValueError(
                 f"Интервал [{a}, {b}] содержит точку разрыва x={point}. "
-                f"Для F2 выбирай интервал только по одну сторону от разрыва."
+                "Выбирай интервал только по одну сторону от разрыва."
             )
         if abs(a - point) < 1e-15:
             a += shift
@@ -63,35 +61,6 @@ def sanitize_interval(
 
     logger.debug("sanitize_interval result a=%s b=%s", a, b)
     return a, b
-
-
-def analytic_comment(function_name: str, interval: Tuple[float, float], kind: str) -> str:
-    logger.debug("analytic_comment function=%s interval=%s kind=%s", function_name, interval, kind)
-    a, b = interval
-    lines = []
-
-    if function_name == "F1":
-        x0 = 2.5
-        if a <= x0 <= b and kind == "max":
-            lines.append(f"Теоретически для F1 максимум достигается в x = 2.5, F1(x)= {f1(x0):.10f}")
-        elif kind == "min":
-            lines.append("Для F1 на отрезке минимум достигается на одной из границ, так как функция парабола ветвями вниз.")
-        comment = "\n".join(lines)
-        logger.debug("analytic_comment result function=%s text=%s", function_name, comment)
-        return comment
-
-    lines.append("Для F2 точки x = -4 и x = 2 являются точками разрыва.")
-    x2_max = (19 - math.sqrt(385.0)) / 4.0
-    x2_min = (19 + math.sqrt(385.0)) / 4.0
-    if a < x2_max < b and kind == "max":
-        lines.append(f"Стационарная точка максимума для ветви (-4, 2): x ≈ {x2_max:.10f}, F2(x) ≈ {f2(x2_max):.10f}")
-    if a < x2_min < b and kind == "min":
-        lines.append(f"Стационарная точка минимума для ветви (2, +∞): x ≈ {x2_min:.10f}, F2(x) ≈ {f2(x2_min):.10f}")
-    comment = "\n".join(lines)
-    logger.debug("analytic_comment result function=%s text=%s", function_name, comment)
-    return comment
-
-
 def dichotomy_search(
     func,
     a: float,

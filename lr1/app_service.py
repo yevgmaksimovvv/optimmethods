@@ -1,18 +1,17 @@
 import logging
-import math
 import time
 from typing import Dict, List, Optional, Tuple
 
 if __package__:
     from .app_models import GridRunResult, InputConfig, RunReport, SearchResult, SkippedRun
-    from .function_defs import FUNCTION_SPECS
+    from .function_defs import FUNCTION_TEMPLATE_SPECS, analytic_comment, build_function_spec
     from .logging_setup import configure_logging
-    from .search_methods import METHOD_ORDER, METHOD_SPECS, analytic_comment, sanitize_interval
+    from .search_methods import METHOD_ORDER, METHOD_SPECS, sanitize_interval
 else:
     from app_models import GridRunResult, InputConfig, RunReport, SearchResult, SkippedRun
-    from function_defs import FUNCTION_SPECS
+    from function_defs import FUNCTION_TEMPLATE_SPECS, analytic_comment, build_function_spec
     from logging_setup import configure_logging
-    from search_methods import METHOD_ORDER, METHOD_SPECS, analytic_comment, sanitize_interval
+    from search_methods import METHOD_ORDER, METHOD_SPECS, sanitize_interval
 
 
 configure_logging()
@@ -46,9 +45,10 @@ def build_input_config(
     b_raw: str,
     eps_raw: str,
     l_raw: str,
+    coefficient_raws: Dict[str, str],
 ) -> InputConfig:
     logger.info(
-        "build_input_config function=%s kind=%s method=%s a=%s b=%s eps=%s l=%s",
+        "build_input_config function=%s kind=%s method=%s a=%s b=%s eps=%s l=%s coefficients=%s",
         function_key,
         kind,
         method_key,
@@ -56,8 +56,9 @@ def build_input_config(
         b_raw,
         eps_raw,
         l_raw,
+        coefficient_raws,
     )
-    if function_key not in FUNCTION_SPECS:
+    if function_key not in FUNCTION_TEMPLATE_SPECS:
         raise ValueError(f"Неизвестная функция: {function_key}")
     if method_key != "all" and method_key not in METHOD_SPECS:
         raise ValueError(f"Неизвестный метод: {method_key}")
@@ -74,7 +75,12 @@ def build_input_config(
     if eps <= 0 or l <= 0:
         raise ValueError("Параметры ε и l должны быть положительными.")
 
-    function_spec = FUNCTION_SPECS[function_key]
+    template = FUNCTION_TEMPLATE_SPECS[function_key]
+    coefficients = {
+        item.key: _parse_float(coefficient_raws.get(item.key, str(item.default)), item.label)
+        for item in template.coefficients
+    }
+    function_spec = build_function_spec(function_key, coefficients)
     shift = max(1e-10, 1e-8 * max(1.0, abs(a), abs(b)))
     interval = sanitize_interval(a, b, forbidden_points=list(function_spec.forbidden_points), shift=shift)
 
@@ -98,16 +104,16 @@ def resolve_method_keys(method_key: str) -> Tuple[str, ...]:
     return (method_key,)
 
 
-def build_plot_range(function_key: str, interval_raw: Tuple[float, float]) -> Tuple[float, float]:
-    logger.debug("build_plot_range function=%s interval_raw=%s", function_key, interval_raw)
+def build_plot_range(function_spec, interval_raw: Tuple[float, float]) -> Tuple[float, float]:
+    logger.debug("build_plot_range function=%s interval_raw=%s", function_spec.key, interval_raw)
     a, b = interval_raw
     margin = max(1.0, 0.2 * (b - a))
     left = a - margin
     right = b + margin
 
-    if function_key == "F2":
-        left = min(left, -10.0)
-        right = max(right, 10.0)
+    if function_spec.forbidden_points:
+        left = min(left, min(function_spec.forbidden_points) - margin)
+        right = max(right, max(function_spec.forbidden_points) + margin)
 
     plot_range = (left, right)
     logger.debug("build_plot_range result=%s", plot_range)
@@ -168,21 +174,12 @@ def _theoretical_optimum(
         except ZeroDivisionError:
             logger.debug("Skipped theoretical candidate x=%s due to undefined function", x)
 
-    if config.function_spec.key == "F1":
-        x_vertex = 2.5
-        if a <= x_vertex <= b:
-            candidates.append((x_vertex, config.function_spec.func(x_vertex), "вершина параболы"))
-    elif config.function_spec.key == "F2":
-        stationary_points = (
-            ((19.0 - math.sqrt(385.0)) / 4.0, "стационарная точка на ветви (-4, 2)"),
-            ((19.0 + math.sqrt(385.0)) / 4.0, "стационарная точка на ветви (2, +inf)"),
-        )
-        for x_value, source in stationary_points:
-            if a < x_value < b:
-                try:
-                    candidates.append((x_value, config.function_spec.func(x_value), source))
-                except ZeroDivisionError:
-                    logger.debug("Skipped F2 stationary point x=%s due to undefined function", x_value)
+    for x_value in config.function_spec.stationary_points:
+        if a < x_value < b:
+            try:
+                candidates.append((x_value, config.function_spec.func(x_value), "стационарная точка"))
+            except ZeroDivisionError:
+                logger.debug("Skipped stationary point x=%s due to undefined function", x_value)
 
     if not candidates:
         return None
@@ -200,7 +197,7 @@ def _build_reference_lines(
 ) -> List[str]:
     lines = [
         "Теоретическая справка:",
-        analytic_comment(config.function_spec.key, config.interval, config.kind) or "—",
+        analytic_comment(config.function_spec, config.interval, config.kind) or "—",
     ]
     reference = _theoretical_optimum(config)
     if reference is None:
@@ -222,8 +219,8 @@ def _build_reference_lines(
         for method_key, result in results_by_method.items():
             lines.append(
                 f"{METHOD_SPECS[method_key].title}: "
-                f"|dx| = {abs(result.x_opt - x_ref):.10f}, "
-                f"|df| = {abs(result.f_opt - f_ref):.10f}"
+                f"|Δx| = {abs(result.x_opt - x_ref):.10f}, "
+                f"|Δf| = {abs(result.f_opt - f_ref):.10f}"
             )
     return lines
 
@@ -360,7 +357,7 @@ def run_single(config: InputConfig) -> RunReport:
     if not results_by_method:
         raise ValueError("Ни один метод не смог выполнить расчёт с текущими параметрами.")
 
-    analytic_note = analytic_comment(config.function_spec.key, config.interval, config.kind) or "—"
+    analytic_note = analytic_comment(config.function_spec, config.interval, config.kind) or "—"
     reference = _theoretical_optimum(config)
     lines.extend(_build_reference_lines(config, results_by_method))
 
@@ -375,7 +372,7 @@ def run_single(config: InputConfig) -> RunReport:
         interval=config.interval,
         eps=config.eps,
         l=config.l,
-        plot_range=build_plot_range(config.function_spec.key, config.interval_raw),
+        plot_range=build_plot_range(config.function_spec, config.interval_raw),
         analytic_note=analytic_note,
         reference_x=reference[0] if reference is not None else None,
         reference_f=reference[1] if reference is not None else None,
@@ -511,8 +508,8 @@ def run_full_grid(config: InputConfig) -> RunReport:
             for method_key, result in results_by_method.items():
                 lines.append(
                     f"{METHOD_SPECS[method_key].title}: "
-                    f"|dx| = {abs(result.x_opt - x_ref):.10f}, "
-                    f"|df| = {abs(result.f_opt - f_ref):.10f}"
+                    f"|Δx| = {abs(result.x_opt - x_ref):.10f}, "
+                    f"|Δf| = {abs(result.f_opt - f_ref):.10f}"
                 )
 
     observation_lines = tuple(_grid_observation_lines(config, successful_runs, skipped_runs))
@@ -532,8 +529,8 @@ def run_full_grid(config: InputConfig) -> RunReport:
         interval=config.interval,
         eps=None,
         l=None,
-        plot_range=build_plot_range(config.function_spec.key, config.interval_raw),
-        analytic_note=analytic_comment(config.function_spec.key, config.interval, config.kind) or "—",
+        plot_range=build_plot_range(config.function_spec, config.interval_raw),
+        analytic_note=analytic_comment(config.function_spec, config.interval, config.kind) or "—",
         reference_x=reference[0] if reference is not None else None,
         reference_f=reference[1] if reference is not None else None,
         reference_source=reference[2] if reference is not None else "",

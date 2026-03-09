@@ -16,19 +16,40 @@ FunctionCallable = Callable[[float], float]
 
 
 @dataclass(frozen=True)
+class CoefficientSpec:
+    key: str
+    label: str
+    default: float
+
+
+@dataclass(frozen=True)
 class FunctionSpec:
     key: str
     title: str
     func: FunctionCallable
     forbidden_points: Tuple[float, ...] = ()
+    stationary_points: Tuple[float, ...] = ()
+    coefficient_values: Tuple[Tuple[str, float], ...] = ()
+    formula_hint: str = ""
 
     def __post_init__(self) -> None:
         logger.debug(
-            "FunctionSpec created key=%s title=%s forbidden_points=%s",
+            "FunctionSpec created key=%s title=%s forbidden_points=%s stationary_points=%s coefficients=%s",
             self.key,
             self.title,
             self.forbidden_points,
+            self.stationary_points,
+            self.coefficient_values,
         )
+
+
+@dataclass(frozen=True)
+class FunctionTemplateSpec:
+    key: str
+    title: str
+    formula_hint: str
+    coefficients: Tuple[CoefficientSpec, ...]
+    builder: Callable[[Dict[str, float]], FunctionSpec]
 
 
 @dataclass(frozen=True)
