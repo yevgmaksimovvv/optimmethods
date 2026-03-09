@@ -66,13 +66,13 @@ def build_input_config(
 
     a = _parse_float(a_raw, "a")
     b = _parse_float(b_raw, "b")
-    eps = _parse_float(eps_raw, "eps")
+    eps = _parse_float(eps_raw, "ε")
     l = _parse_float(l_raw, "l")
 
     if a >= b:
         raise ValueError("Должно быть a < b.")
     if eps <= 0 or l <= 0:
-        raise ValueError("eps и l должны быть положительными.")
+        raise ValueError("Параметры ε и l должны быть положительными.")
 
     function_spec = FUNCTION_SPECS[function_key]
     shift = max(1e-10, 1e-8 * max(1.0, abs(a), abs(b)))
@@ -134,7 +134,7 @@ def _is_valid_method_params(method_key: str, eps: float, l: float) -> bool:
 
 def _skip_reason(method_key: str) -> str:
     if method_key == "dichotomy":
-        return "для дихотомии нужно eps < l"
+        return "для метода дихотомии нужно ε < l"
     return "невалидная комбинация параметров"
 
 
@@ -253,14 +253,14 @@ def _grid_observation_lines(
         combination_word = _format_count_ru(skipped_count, "комбинация", "комбинации", "комбинаций")
         lines.append(
             f"Пропущено {skipped_count} невалидные {combination_word} параметров. "
-            "Это не ошибка метода, а ограничение на допустимые eps и l."
+            "Это не ошибка метода, а ограничение на допустимые значения ε и l."
         )
 
     if successful_runs:
         best_run = min(successful_runs, key=lambda item: item[3].func_evals)
         lines.append(
-            f"Самый экономный запуск по числу вычислений функции: {METHOD_SPECS[best_run[0]].title} "
-            f"при eps={best_run[1]}, l={best_run[2]} (evals={best_run[3].func_evals})."
+            f"Самый экономный запуск по числу вызовов функции: {METHOD_SPECS[best_run[0]].title} "
+            f"при ε={best_run[1]}, l={best_run[2]} (вызовов: {best_run[3].func_evals})."
         )
 
         for method_key in resolve_method_keys(config.method_key):
@@ -276,7 +276,7 @@ def _grid_observation_lines(
             if len(avg_by_l) == 2 and avg_by_l[min(avg_by_l)] > avg_by_l[max(avg_by_l)]:
                 lines.append(
                     f"Для {METHOD_SPECS[method_key].title} уменьшение l "
-                    f"с {max(avg_by_l):g} до {min(avg_by_l):g} увеличивает среднее число evals."
+                    f"с {max(avg_by_l):g} до {min(avg_by_l):g} увеличивает среднее число вызовов функции."
                 )
 
             avg_by_eps: Dict[float, float] = {}
@@ -289,12 +289,12 @@ def _grid_observation_lines(
                 eps_max = max(avg_by_eps)
                 if avg_by_eps[eps_min] > avg_by_eps[eps_max]:
                     lines.append(
-                        f"Для {METHOD_SPECS[method_key].title} уменьшение eps "
-                        f"с {eps_max:g} до {eps_min:g} повышает среднее число evals."
+                        f"Для {METHOD_SPECS[method_key].title} уменьшение ε "
+                        f"с {eps_max:g} до {eps_min:g} повышает среднее число вызовов функции."
                     )
                 elif abs(avg_by_eps[eps_min] - avg_by_eps[eps_max]) < 1e-9:
                     lines.append(
-                        f"Для {METHOD_SPECS[method_key].title} в этой сетке число evals практически не зависит от eps."
+                        f"Для {METHOD_SPECS[method_key].title} в этой сетке число вызовов функции почти не зависит от ε."
                     )
 
     return lines
@@ -325,7 +325,7 @@ def run_single(config: InputConfig) -> RunReport:
     lines.extend(
         [
             f"Поиск: {config.kind}",
-            f"eps = {config.eps}, l = {config.l}",
+            f"ε = {config.eps}, l = {config.l}",
             "",
         ]
     )
@@ -422,7 +422,7 @@ def run_full_grid(config: InputConfig) -> RunReport:
     for eps in GRID_EPS_VALUES:
         for l in GRID_L_VALUES:
             logger.debug("run_full_grid combination eps=%s l=%s", eps, l)
-            lines.append(f"=== eps={eps}, l={l} ===")
+            lines.append(f"=== ε={eps}, l={l} ===")
             for method_key in method_keys:
                 if not _is_valid_method_params(method_key, eps, l):
                     reason = _skip_reason(method_key)
@@ -473,11 +473,11 @@ def run_full_grid(config: InputConfig) -> RunReport:
                 lines.append(
                     f"{result.method}: x*={result.x_opt:.8f}, "
                     f"f(x*)={result.f_opt:.8f}, "
-                    f"iter={len(result.iterations)}, evals={result.func_evals}"
+                    f"итераций={len(result.iterations)}, вызовов={result.func_evals}"
                 )
             lines.append("")
 
-    lines.append("Сравнение по числу вычислений функции:")
+    lines.append("Сравнение по числу вызовов функции:")
     results_by_method: Dict[str, SearchResult] = {}
     for method_key in method_keys:
         runs = best_by_method[method_key]
@@ -488,8 +488,8 @@ def run_full_grid(config: InputConfig) -> RunReport:
         worst_run = max(runs, key=lambda item: item[2].func_evals)
         lines.append(
             f"{METHOD_SPECS[method_key].title}: "
-            f"минимум evals = {best_run[2].func_evals} при eps={best_run[0]}, l={best_run[1]}; "
-            f"максимум evals = {worst_run[2].func_evals} при eps={worst_run[0]}, l={worst_run[1]}"
+            f"минимум вызовов = {best_run[2].func_evals} при ε={best_run[0]}, l={best_run[1]}; "
+            f"максимум вызовов = {worst_run[2].func_evals} при ε={worst_run[0]}, l={worst_run[1]}"
         )
         results_by_method[method_key] = best_run[2]
 

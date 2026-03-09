@@ -282,9 +282,9 @@ class ExtremumWindow(QMainWindow):
             group=self.method_group,
             options=(
                 ("Все", "all"),
-                ("Dichotomy", "dichotomy"),
-                ("Golden", "golden"),
-                ("Fibonacci", "fibonacci"),
+                ("Дихотомия", "dichotomy"),
+                ("Золотое сечение", "golden"),
+                ("Фибоначчи", "fibonacci"),
             ),
             columns=2,
         )
@@ -298,9 +298,9 @@ class ExtremumWindow(QMainWindow):
 
         self.a_input = self._add_labeled_input(grid, 0, "Левая граница a")
         self.b_input = self._add_labeled_input(grid, 1, "Правая граница b")
-        self.eps_input = self._add_labeled_input(grid, 2, "eps")
+        self.eps_input = self._add_labeled_input(grid, 2, "Точность ε")
         self._add_quick_buttons(grid, 3, EPS_PRESETS, self.eps_input)
-        self.l_input = self._add_labeled_input(grid, 4, "l")
+        self.l_input = self._add_labeled_input(grid, 4, "Длина интервала l")
         self._add_quick_buttons(grid, 5, L_PRESETS, self.l_input)
 
         layout.addWidget(box)
@@ -315,7 +315,7 @@ class ExtremumWindow(QMainWindow):
         self.run_button.setProperty("role", "primary")
         box_layout.addWidget(self.run_button)
 
-        self.grid_button = QPushButton("Сетка eps × l")
+        self.grid_button = QPushButton("Исследование ε × l")
         self.grid_button.clicked.connect(self.handle_run_full_grid)
         box_layout.addWidget(self.grid_button)
 
@@ -382,7 +382,7 @@ class ExtremumWindow(QMainWindow):
         reference_layout.addWidget(self.summary_analytic_label)
         summary_layout.addWidget(self.summary_reference_box)
 
-        self.summary_skipped_box = QGroupBox("Пропущенные комбинации")
+        self.summary_skipped_box = QGroupBox("Пропущенные наборы параметров")
         skipped_layout = QVBoxLayout(self.summary_skipped_box)
         self.summary_skipped_table = self._create_table_widget()
         skipped_layout.addWidget(self.summary_skipped_table)
@@ -403,7 +403,7 @@ class ExtremumWindow(QMainWindow):
 
         iterations_tab = QWidget()
         iterations_layout = QVBoxLayout(iterations_tab)
-        self.table_method_box = QGroupBox("Итерации метода")
+        self.table_method_box = QGroupBox("Итерации выбранного метода")
         method_layout = QHBoxLayout(self.table_method_box)
         method_layout.setContentsMargins(10, 10, 10, 10)
         method_layout.setSpacing(10)
@@ -558,14 +558,14 @@ class ExtremumWindow(QMainWindow):
         if report.mode == "single":
             rows.extend(
                 [
-                    ["eps", self._format_optional_float(report.eps)],
+                    ["Точность ε", self._format_optional_float(report.eps)],
                     ["l", self._format_optional_float(report.l)],
                 ]
             )
         else:
             rows.extend(
                 [
-                    ["Сетка eps", ", ".join(f"{value:g}" for value in (0.1, 0.01, 0.001))],
+                    ["Значения ε", ", ".join(f"{value:g}" for value in (0.1, 0.01, 0.001))],
                     ["Сетка l", ", ".join(f"{value:g}" for value in (0.1, 0.01))],
                 ]
             )
@@ -598,12 +598,12 @@ class ExtremumWindow(QMainWindow):
             for run in report.grid_runs_by_method.get(method_key, ()):
                 dx, df = self._result_error_pair(report, run.result.x_opt, run.result.f_opt)
                 rows.append(
-                    [
-                        run.result.method,
-                        f"{run.eps:g}",
-                        f"{run.l:g}",
-                        f"{run.result.x_opt:.10f}",
-                        f"{run.result.f_opt:.10f}",
+                [
+                    run.result.method,
+                    f"{run.eps:g}",
+                    f"{run.l:g}",
+                    f"{run.result.x_opt:.10f}",
+                    f"{run.result.f_opt:.10f}",
                         str(len(run.result.iterations)),
                         str(run.result.func_evals),
                         self._format_interval(run.result.interval_final),
@@ -619,7 +619,7 @@ class ExtremumWindow(QMainWindow):
             self._set_table_data(self.summary_context_table, ["Параметр", "Значение"], [])
             self._set_table_data(self.summary_results_table, ["Результат"], [])
             self._set_table_data(self.summary_reference_table, ["Параметр", "Значение"], [])
-            self._set_table_data(self.summary_skipped_table, ["Метод", "eps", "l", "Причина"], [])
+            self._set_table_data(self.summary_skipped_table, ["Метод", "ε", "l", "Причина"], [])
             self.summary_skipped_box.hide()
             self.summary_notes_box.hide()
             self.summary_reference_box.hide()
@@ -632,12 +632,12 @@ class ExtremumWindow(QMainWindow):
         if report.mode == "grid":
             result_headers = [
                 "Метод",
-                "eps",
+                "ε",
                 "l",
                 "x*",
                 "f(x*)",
                 "Итерации",
-                "Evals",
+                "Вызовы функции",
                 "Финальный интервал",
                 "|dx|",
                 "|df|",
@@ -649,7 +649,7 @@ class ExtremumWindow(QMainWindow):
                 "x*",
                 "f(x*)",
                 "Итерации",
-                "Evals",
+                "Вызовы функции",
                 "Финальный интервал",
                 "|dx|",
                 "|df|",
@@ -677,7 +677,7 @@ class ExtremumWindow(QMainWindow):
             ]
             for item in report.skipped_runs
         ]
-        self._set_table_data(self.summary_skipped_table, ["Метод", "eps", "l", "Причина"], skipped_rows)
+        self._set_table_data(self.summary_skipped_table, ["Метод", "ε", "l", "Причина"], skipped_rows)
         self.summary_skipped_box.setVisible(bool(skipped_rows))
 
         note_items = list(report.observations)
@@ -783,7 +783,7 @@ class ExtremumWindow(QMainWindow):
         except ValueError as exc:
             QMessageBox.critical(self, "Ошибка", str(exc))
             return
-        self._start_worker("Перебираю eps × l...", lambda: run_full_grid(config), self._apply_report, "calc")
+        self._start_worker("Запускаю исследование ε × l...", lambda: run_full_grid(config), self._apply_report, "calc")
 
     def _apply_report(self, payload: object) -> None:
         report = payload
@@ -842,7 +842,7 @@ class ExtremumWindow(QMainWindow):
         runs = report.grid_runs_by_method.get(self.state.selected_table_method, ())
         for run in runs:
             self.grid_run_list.addItem(
-                f"eps={run.eps:g}, l={run.l:g} | evals={run.result.func_evals} | x*={run.result.x_opt:.6f}"
+                f"ε={run.eps:g}, l={run.l:g} | вызовов={run.result.func_evals} | x*={run.result.x_opt:.6f}"
             )
         self.grid_run_list.setVisible(bool(runs))
         if runs:

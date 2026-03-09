@@ -55,15 +55,15 @@ def build_plot_figure(
     for result in results:
         a0, b0 = result.interval_initial
         af, bf = result.interval_final
-        axis.axvline(a0, linestyle="--", alpha=0.45, label=f"Init [{a0:.3f}, {b0:.3f}]")
+        axis.axvline(a0, linestyle="--", alpha=0.45, label=f"Исходный интервал [{a0:.3f}, {b0:.3f}]")
         axis.axvline(b0, linestyle="--", alpha=0.45)
-        axis.axvline(af, linestyle=":", alpha=0.75, label=f"Final [{af:.5f}, {bf:.5f}]")
+        axis.axvline(af, linestyle=":", alpha=0.75, label=f"Финальный интервал [{af:.5f}, {bf:.5f}]")
         axis.axvline(bf, linestyle=":", alpha=0.75)
         axis.scatter([result.x_opt], [result.f_opt], s=45, label=f"x* = {result.x_opt:.5f} ({result.method})")
 
     for point in function_spec.forbidden_points:
         if left < point < right:
-            axis.axvline(point, linestyle="-.", alpha=0.8, label=f"Discontinuity x={point:g}")
+            axis.axvline(point, linestyle="-.", alpha=0.8, label=f"Точка разрыва x={point:g}")
 
     axis.set_title(function_spec.title)
     axis.set_xlabel("x")

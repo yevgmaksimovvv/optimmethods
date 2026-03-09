@@ -23,7 +23,7 @@ def better(v1: float, v2: float, kind: str) -> bool:
         return v1 > v2
     if kind == "min":
         return v1 < v2
-    raise ValueError("kind must be 'max' or 'min'")
+    raise ValueError("Тип поиска должен быть 'max' или 'min'")
 
 
 def compare_left_right(left_val: float, right_val: float, kind: str) -> str:
@@ -103,11 +103,11 @@ def dichotomy_search(
     started = time.perf_counter()
     logger.info("dichotomy_search start a=%s b=%s eps=%s l=%s kind=%s", a, b, eps, l, kind)
     if eps <= 0:
-        raise ValueError("eps must be > 0")
+        raise ValueError("Параметр ε должен быть больше 0")
     if l <= 0:
-        raise ValueError("l must be > 0")
+        raise ValueError("Параметр l должен быть больше 0")
     if eps >= l:
-        raise ValueError("Для дихотомии нужно eps < l")
+        raise ValueError("Для метода дихотомии нужно ε < l")
 
     initial = (a, b)
     rows: List[IterationRow] = []
@@ -146,7 +146,7 @@ def dichotomy_search(
     evals += 1
 
     result = SearchResult(
-        method="Dichotomy",
+        method="Дихотомия",
         kind=kind,
         x_opt=x_opt,
         f_opt=f_opt,
@@ -179,7 +179,7 @@ def golden_section_search(
     del eps
 
     if l <= 0:
-        raise ValueError("l must be > 0")
+        raise ValueError("Параметр l должен быть больше 0")
 
     initial = (a, b)
     rows: List[IterationRow] = []
@@ -228,7 +228,7 @@ def golden_section_search(
     evals += 1
 
     result = SearchResult(
-        method="Golden section",
+        method="Золотое сечение",
         kind=kind,
         x_opt=x_opt,
         f_opt=f_opt,
@@ -268,9 +268,9 @@ def fibonacci_search(
     started = time.perf_counter()
     logger.info("fibonacci_search start a=%s b=%s eps=%s l=%s kind=%s", a, b, eps, l, kind)
     if l <= 0:
-        raise ValueError("l must be > 0")
+        raise ValueError("Параметр l должен быть больше 0")
     if eps <= 0:
-        raise ValueError("eps must be > 0")
+        raise ValueError("Параметр ε должен быть больше 0")
 
     initial = (a, b)
     rows: List[IterationRow] = []
@@ -284,7 +284,7 @@ def fibonacci_search(
         x_opt = (a + b) / 2.0
         f_opt = func(x_opt)
         result = SearchResult(
-            method="Fibonacci",
+            method="Фибоначчи",
             kind=kind,
             x_opt=x_opt,
             f_opt=f_opt,
@@ -356,7 +356,7 @@ def fibonacci_search(
     evals += 1
 
     result = SearchResult(
-        method="Fibonacci",
+        method="Фибоначчи",
         kind=kind,
         x_opt=x_opt,
         f_opt=f_opt,
@@ -381,17 +381,17 @@ METHOD_ORDER = ("dichotomy", "golden", "fibonacci")
 METHOD_SPECS: Dict[str, MethodSpec] = {
     "dichotomy": MethodSpec(
         key="dichotomy",
-        title="Dichotomy",
+        title="Дихотомия",
         runner=dichotomy_search,
     ),
     "golden": MethodSpec(
         key="golden",
-        title="Golden section",
+        title="Золотое сечение",
         runner=golden_section_search,
     ),
     "fibonacci": MethodSpec(
         key="fibonacci",
-        title="Fibonacci",
+        title="Фибоначчи",
         runner=fibonacci_search,
     ),
 }
