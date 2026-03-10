@@ -25,7 +25,7 @@ def better(v1: float, v2: float, kind: str) -> bool:
 
 
 def compare_left_right(left_val: float, right_val: float, kind: str) -> str:
-    return "right" if better(right_val, left_val, kind) else "left"
+    return "right" if better(left_val, right_val, kind) else "left"
 
 
 def sanitize_interval(
@@ -85,8 +85,8 @@ def dichotomy_search(
 
     while (b - a) > l:
         mid = (a + b) / 2.0
-        lam = mid - eps / 2.0
-        mu = mid + eps / 2.0
+        lam = mid - eps
+        mu = mid + eps
         f_lam = func(lam)
         f_mu = func(mu)
         evals += 2
@@ -308,19 +308,20 @@ def fibonacci_search(
         k += 1
 
     rows.append(IterationRow(k, a, b, lam, mu, f_lam, f_mu))
-    delta = min(eps, max((b - a) / 100.0, 1e-12))
-    x1 = (a + b) / 2.0 - delta / 2.0
-    x2 = (a + b) / 2.0 + delta / 2.0
-    f1v = func(x1)
-    f2v = func(x2)
-    evals += 2
+    lambda_n = lam
+    mu_n = lambda_n + eps
 
-    if compare_left_right(f1v, f2v, kind) == "right":
-        a = x1
+    f_mu_n = func(mu_n)
+    evals += 1
+
+    if compare_left_right(f_lam, f_mu_n, kind) == "right":
+        a_final = lambda_n
+        b_final = b
     else:
-        b = x2
+        a_final = a
+        b_final = lambda_n
 
-    x_opt = (a + b) / 2.0
+    x_opt = (a_final + b_final) / 2.0
     f_opt = func(x_opt)
     evals += 1
 
@@ -332,7 +333,7 @@ def fibonacci_search(
         iterations=rows,
         func_evals=evals,
         interval_initial=initial,
-        interval_final=(a, b),
+        interval_final=(a_final, b_final),
     )
     logger.info(
         "fibonacci_search done iterations=%d evals=%d x_opt=%.10f f_opt=%.10f duration_ms=%.2f",
