@@ -6,6 +6,7 @@ from typing import Callable, Dict, List, Optional
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
 from PySide6.QtCore import QObject, Qt, QThread, Signal
+from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -17,6 +18,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QListWidget,
+    QListWidgetItem,
     QMainWindow,
     QMessageBox,
     QPushButton,
@@ -39,19 +41,21 @@ if __package__:
     from .app_service import build_input_config, run_full_grid, run_single
     from .function_defs import FUNCTION_TEMPLATE_SPECS
     from .logging_setup import configure_logging, get_log_file_path
-    from .plotting import build_plot_figure
+    from .plotting import build_grid_plot_figure, build_plot_figure
     from .search_methods import METHOD_SPECS
 else:
     from app_models import AppState, GridRunResult, InputConfig, RunReport
     from app_service import build_input_config, run_full_grid, run_single
     from function_defs import FUNCTION_TEMPLATE_SPECS
     from logging_setup import configure_logging, get_log_file_path
-    from plotting import build_plot_figure
+    from plotting import build_grid_plot_figure, build_plot_figure
     from search_methods import METHOD_SPECS
 
 
 configure_logging()
 logger = logging.getLogger("lr1.gui")
+
+APP_TITLE = "Исследование методов поиска экстремумов"
 
 
 class Worker(QObject):
@@ -79,8 +83,25 @@ class PlotCanvas(FigureCanvasQTAgg):
     def __init__(self, figure: Figure, parent: Optional[QWidget] = None):
         super().__init__(figure)
         self.setParent(parent)
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.setFocusPolicy(Qt.NoFocus)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.updateGeometry()
+
+    def wheelEvent(self, event) -> None:
+        parent = self.parentWidget()
+        while parent is not None and not isinstance(parent, QScrollArea):
+            parent = parent.parentWidget()
+
+        if isinstance(parent, QScrollArea):
+            delta_y = event.angleDelta().y()
+            if delta_y:
+                scrollbar = parent.verticalScrollBar()
+                step = max(scrollbar.singleStep(), 24)
+                scrollbar.setValue(scrollbar.value() - int((delta_y / 120) * step * 3))
+                event.accept()
+                return
+
+        super().wheelEvent(event)
 
 
 class ExtremumWindow(QMainWindow):
@@ -99,7 +120,7 @@ class ExtremumWindow(QMainWindow):
         self.coefficient_inputs: Dict[str, Dict[str, QLineEdit]] = {}
         self.function_stack_indexes: Dict[str, int] = {}
 
-        self.setWindowTitle("Поиск экстремума")
+        self.setWindowTitle(APP_TITLE)
         self.resize(1480, 940)
         self._apply_styles()
         self._build_ui()
@@ -190,6 +211,11 @@ class ExtremumWindow(QMainWindow):
                 color: #f5f7fb;
                 selection-background-color: #2a6df4;
             }
+            QListWidget#GridRunList {
+                background: transparent;
+                border: 0;
+                padding: 0;
+            }
             QTreeWidget, QTableWidget {
                 background: #14161b;
                 border: 1px solid #464b59;
@@ -203,6 +229,65 @@ class ExtremumWindow(QMainWindow):
             QListWidget::item {
                 padding: 6px 8px;
                 border-radius: 6px;
+            }
+            QListWidget#GridRunList::item {
+                padding: 0;
+                margin: 0 0 10px 0;
+                border: 0;
+                background: transparent;
+            }
+            QWidget#GridRunCard {
+                background: #171b24;
+                border: 1px solid #31384a;
+                border-radius: 12px;
+            }
+            QWidget#GridRunCard[selected="true"] {
+                background: #1b3c73;
+                border: 1px solid #2f81f7;
+            }
+            QWidget#GridRunMetric {
+                background: transparent;
+            }
+            QLabel[role="grid-run-metric-caption"] {
+                color: #9aa5bb;
+                font-size: 11px;
+                font-weight: 700;
+                letter-spacing: 0.04em;
+                text-transform: uppercase;
+            }
+            QLabel[role="grid-run-metric-value"] {
+                color: #eef2f8;
+                font-size: 18px;
+                font-weight: 700;
+            }
+            QWidget#GridRunCard[selected="true"] QLabel[role="grid-run-metric-caption"] {
+                color: #cddcff;
+            }
+            QWidget#GridRunCard[selected="true"] QLabel[role="grid-run-metric-value"] {
+                color: #ffffff;
+            }
+            QTreeWidget#IterationsTree {
+                background: #12161d;
+                alternate-background-color: #151b25;
+                font-family: "SF Mono", "Menlo", "Consolas", monospace;
+                font-size: 14px;
+            }
+            QTreeWidget#IterationsTree::item {
+                padding: 5px 8px;
+                border: 0;
+            }
+            QTreeWidget#IterationsTree::item:selected {
+                background: #22314f;
+                color: #ffffff;
+            }
+            QTreeWidget#IterationsTree QHeaderView::section {
+                background: #222938;
+                color: #dbe2ee;
+                border-right: 1px solid #33415b;
+                border-bottom: 1px solid #33415b;
+                padding: 6px 8px;
+                font-size: 12px;
+                font-weight: 700;
             }
             QHeaderView::section {
                 background: #252933;
@@ -609,34 +694,60 @@ class ExtremumWindow(QMainWindow):
         iterations_layout.addWidget(self.table_method_box)
 
         self.iterations_tree = QTreeWidget()
+        self.iterations_tree.setObjectName("IterationsTree")
         self.iterations_tree.setColumnCount(7)
-        self.iterations_tree.setHeaderLabels(("k", "a(k)", "b(k)", "λ(k)", "μ(k)", "F(λ(k))", "F(μ(k))"))
+        self.iterations_tree.setHeaderLabels(("k", "a", "b", "λ", "μ", "f(λ)", "f(μ)"))
         self.iterations_tree.setAlternatingRowColors(True)
         self.iterations_tree.setRootIsDecorated(False)
-        self.iterations_tree.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        self.iterations_tree.setUniformRowHeights(True)
+        self.iterations_tree.setIndentation(0)
+        self.iterations_tree.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.iterations_tree.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Maximum)
         self.iterations_tree.setProperty("max_visible_rows", 14)
+        self.iterations_tree_holder = QWidget()
+        iterations_tree_holder_layout = QHBoxLayout(self.iterations_tree_holder)
+        iterations_tree_holder_layout.setContentsMargins(0, 0, 0, 0)
+        iterations_tree_holder_layout.setSpacing(0)
+        iterations_tree_holder_layout.addWidget(self.iterations_tree, 0, Qt.AlignLeft | Qt.AlignTop)
+        iterations_tree_holder_layout.addStretch(1)
+        self.grid_runs_caption = QLabel("Прогоны серии")
+        self.grid_runs_caption.setObjectName("SectionCaption")
+        self.grid_runs_caption.hide()
         self.grid_run_list = QListWidget()
-        self.grid_run_list.setProperty("max_visible_rows", 5)
+        self.grid_run_list.setObjectName("GridRunList")
+        self.grid_run_list.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.grid_run_list.setFocusPolicy(Qt.StrongFocus)
+        self.grid_run_list.setProperty("max_visible_rows", 4)
         self.grid_run_list.hide()
         self.grid_run_list.currentRowChanged.connect(self.on_grid_run_change)
+        iterations_layout.addWidget(self.grid_runs_caption)
         iterations_layout.addWidget(self.grid_run_list)
-        iterations_layout.addWidget(self.iterations_tree)
+        iterations_layout.addWidget(self.iterations_tree_holder)
         iterations_layout.addStretch(1)
         self.tabs.addTab(iterations_tab, "Итерации")
 
         plot_tab = QWidget()
         plot_layout = QVBoxLayout(plot_tab)
+        self.plot_context_label = QLabel("")
+        self.plot_context_label.setObjectName("SectionHint")
+        self.plot_context_label.setWordWrap(True)
+        self.plot_context_label.hide()
+        plot_layout.addWidget(self.plot_context_label)
         self.plot_state_label = QLabel("График появится после расчёта.")
         self.plot_state_label.setAlignment(Qt.AlignCenter)
         plot_layout.addWidget(self.plot_state_label)
         self.plot_scroll = QScrollArea()
         self.plot_scroll.setWidgetResizable(True)
         self.plot_scroll.setFrameShape(QScrollArea.NoFrame)
+        self.plot_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.plot_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.plot_scroll.verticalScrollBar().setSingleStep(32)
         plot_layout.addWidget(self.plot_scroll)
         self.plot_host = QWidget()
         self.plot_host_layout = QVBoxLayout(self.plot_host)
         self.plot_host_layout.setContentsMargins(0, 0, 0, 0)
         self.plot_host_layout.setSpacing(0)
+        self.plot_host_layout.setAlignment(Qt.AlignTop)
         self.plot_scroll.setWidget(self.plot_host)
         self.tabs.addTab(plot_tab, "График")
         self.tabs.currentChanged.connect(self.on_tab_changed)
@@ -874,6 +985,58 @@ class ExtremumWindow(QMainWindow):
         table.resizeRowsToContents()
         self._fit_table_height(table)
 
+    def _create_grid_run_metric(self, caption: str, value: str) -> QWidget:
+        cell = QWidget()
+        cell.setObjectName("GridRunMetric")
+        layout = QVBoxLayout(cell)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(2)
+
+        caption_label = QLabel(caption)
+        caption_label.setProperty("role", "grid-run-metric-caption")
+        value_label = QLabel(value)
+        value_label.setProperty("role", "grid-run-metric-value")
+
+        layout.addWidget(caption_label)
+        layout.addWidget(value_label)
+        return cell
+
+    def _create_grid_run_card(self, run: GridRunResult) -> QWidget:
+        card = QWidget()
+        card.setObjectName("GridRunCard")
+        card.setProperty("selected", False)
+
+        layout = QHBoxLayout(card)
+        layout.setContentsMargins(16, 12, 16, 12)
+        layout.setSpacing(18)
+
+        metrics = (
+            ("ε", f"{run.eps:g}", 0),
+            ("l", f"{run.l:g}", 0),
+            ("Вызовы", str(run.result.func_evals), 0),
+            ("x*", self._format_float(run.result.x_opt), 1),
+        )
+        for caption, value, stretch in metrics:
+            layout.addWidget(self._create_grid_run_metric(caption, value), stretch)
+
+        return card
+
+    def _refresh_widget_style(self, widget: QWidget) -> None:
+        style = widget.style()
+        style.unpolish(widget)
+        style.polish(widget)
+        widget.update()
+
+    def _sync_grid_run_card_selection(self) -> None:
+        current_row = self.grid_run_list.currentRow()
+        for row_index in range(self.grid_run_list.count()):
+            item = self.grid_run_list.item(row_index)
+            widget = self.grid_run_list.itemWidget(item)
+            if widget is None:
+                continue
+            widget.setProperty("selected", row_index == current_row)
+            self._refresh_widget_style(widget)
+
     def _fit_table_height(self, table: QTableWidget) -> None:
         max_visible_rows = int(table.property("max_visible_rows") or 6)
         visible_rows = min(table.rowCount(), max_visible_rows)
@@ -902,6 +1065,27 @@ class ExtremumWindow(QMainWindow):
 
     def _format_optional_float(self, value: Optional[float]) -> str:
         return "—" if value is None else self._format_float(value)
+
+    def _format_iteration_value(self, value: float) -> str:
+        return self._format_float(value, 5)
+
+    def _set_iteration_item_colors(
+        self,
+        item: QTreeWidgetItem,
+        column: int,
+        *,
+        foreground: Optional[str] = None,
+        background: Optional[str] = None,
+    ) -> None:
+        if foreground is not None:
+            item.setForeground(column, QBrush(QColor(foreground)))
+        if background is not None:
+            item.setBackground(column, QBrush(QColor(background)))
+
+    def _iteration_left_wins(self, kind: str, left_value: float, right_value: float) -> bool:
+        if kind == "max":
+            return left_value >= right_value
+        return left_value <= right_value
 
     def _result_error_pair(self, report: RunReport, x_value: float, f_value: float) -> List[str]:
         if report.reference_x is None or report.reference_f is None:
@@ -1052,11 +1236,17 @@ class ExtremumWindow(QMainWindow):
 
         if tree.topLevelItemCount() == 0:
             tree.setFixedHeight(max(header_height + frame_height + 96, 140))
+            width = frame_height + sum(tree.columnWidth(index) for index in range(tree.columnCount())) + 12
+            tree.setFixedWidth(max(width, 420))
             tree.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
             return
 
         height = header_height + rows_height + frame_height + 12
         tree.setFixedHeight(min(max(height, 140), 520))
+        width = frame_height + sum(tree.columnWidth(index) for index in range(tree.columnCount())) + 12
+        if tree.topLevelItemCount() > max_visible_rows:
+            width += tree.verticalScrollBar().sizeHint().width()
+        tree.setFixedWidth(width)
         tree.setVerticalScrollBarPolicy(
             Qt.ScrollBarAsNeeded if tree.topLevelItemCount() > max_visible_rows else Qt.ScrollBarAlwaysOff
         )
@@ -1259,6 +1449,7 @@ class ExtremumWindow(QMainWindow):
         self.grid_run_list.clear()
         report = self.state.last_report
         if report is None or report.mode != "grid":
+            self.grid_runs_caption.hide()
             self.grid_run_list.hide()
             self._fit_list_height(self.grid_run_list)
             self.grid_run_list.blockSignals(False)
@@ -1266,14 +1457,23 @@ class ExtremumWindow(QMainWindow):
 
         runs = report.grid_runs_by_method.get(self.state.selected_table_method, ())
         for run in runs:
-            self.grid_run_list.addItem(
-                f"ε={run.eps:g}, l={run.l:g} | вызовов={run.result.func_evals} | x*={run.result.x_opt:.6f}"
+            item = QListWidgetItem()
+            item.setToolTip(
+                f"ε={run.eps:g}, l={run.l:g}, вызовов={run.result.func_evals}, "
+                f"x*={self._format_float(run.result.x_opt)}"
             )
+            card = self._create_grid_run_card(run)
+            item.setSizeHint(card.sizeHint())
+            self.grid_run_list.addItem(item)
+            self.grid_run_list.setItemWidget(item, card)
+
+        self.grid_runs_caption.setVisible(bool(runs))
         self.grid_run_list.setVisible(bool(runs))
         if runs:
             index = min(self.state.selected_grid_run_index, len(runs) - 1)
             self.grid_run_list.setCurrentRow(index)
             self.state.selected_grid_run_index = index
+        self._sync_grid_run_card_selection()
         self._fit_list_height(self.grid_run_list)
         self.grid_run_list.blockSignals(False)
 
@@ -1302,6 +1502,7 @@ class ExtremumWindow(QMainWindow):
             self.render_last_plot()
 
     def on_grid_run_change(self, row: int) -> None:
+        self._sync_grid_run_card_selection()
         if row < 0:
             return
         self.state.selected_grid_run_index = row
@@ -1323,19 +1524,55 @@ class ExtremumWindow(QMainWindow):
         if result is None:
             self._fit_tree_height(self.iterations_tree)
             return
+
+        header = self.iterations_tree.header()
+        header.setStretchLastSection(False)
+        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        for index in range(1, self.iterations_tree.columnCount()):
+            header.setSectionResizeMode(index, QHeaderView.ResizeToContents)
+        header_item = self.iterations_tree.headerItem()
+        header_item.setTextAlignment(0, Qt.AlignCenter)
+        for index in range(1, self.iterations_tree.columnCount()):
+            header_item.setTextAlignment(index, Qt.AlignRight | Qt.AlignVCenter)
+
         for row in result.iterations:
-            QTreeWidgetItem(
+            item = QTreeWidgetItem(
                 self.iterations_tree,
                 [
                     str(row.k),
-                    f"{row.a:.8f}",
-                    f"{row.b:.8f}",
-                    f"{row.lam:.8f}",
-                    f"{row.mu:.8f}",
-                    f"{row.f_lam:.8f}",
-                    f"{row.f_mu:.8f}",
+                    self._format_iteration_value(row.a),
+                    self._format_iteration_value(row.b),
+                    self._format_iteration_value(row.lam),
+                    self._format_iteration_value(row.mu),
+                    self._format_iteration_value(row.f_lam),
+                    self._format_iteration_value(row.f_mu),
                 ],
             )
+            item.setTextAlignment(0, Qt.AlignCenter)
+            for column in range(1, self.iterations_tree.columnCount()):
+                item.setTextAlignment(column, Qt.AlignRight | Qt.AlignVCenter)
+
+            self._set_iteration_item_colors(item, 0, foreground="#9aa5bb")
+            self._set_iteration_item_colors(item, 1, foreground="#d7deea")
+            self._set_iteration_item_colors(item, 2, foreground="#d7deea")
+
+            left_wins = self._iteration_left_wins(result.kind, row.f_lam, row.f_mu)
+            winner_columns = (3, 5) if left_wins else (4, 6)
+            loser_columns = (4, 6) if left_wins else (3, 5)
+            winner_background = "#173349" if left_wins else "#2f2a1c"
+            winner_foreground = "#dff0ff" if left_wins else "#f2e7c9"
+            loser_foreground = "#8f98aa"
+
+            for column in winner_columns:
+                self._set_iteration_item_colors(
+                    item,
+                    column,
+                    foreground=winner_foreground,
+                    background=winner_background,
+                )
+            for column in loser_columns:
+                self._set_iteration_item_colors(item, column, foreground=loser_foreground)
+
         for index in range(self.iterations_tree.columnCount()):
             self.iterations_tree.resizeColumnToContents(index)
         self._fit_tree_height(self.iterations_tree)
@@ -1343,10 +1580,45 @@ class ExtremumWindow(QMainWindow):
     def _show_plot_placeholder(self, text: str) -> None:
         self.plot_state_label.setText(text)
         self.plot_state_label.show()
+        if text:
+            self.plot_context_label.hide()
         if self.plot_canvas is not None:
             self.plot_host_layout.removeWidget(self.plot_canvas)
             self.plot_canvas.deleteLater()
             self.plot_canvas = None
+
+    def _update_plot_context(self) -> None:
+        report = self.state.last_report
+        if report is None:
+            self.plot_context_label.hide()
+            self.plot_context_label.setText("")
+            return
+
+        if report.mode == "grid":
+            current_run = self._selected_grid_run()
+            if current_run is None or not self.state.selected_table_method:
+                self.plot_context_label.hide()
+                self.plot_context_label.setText("")
+                return
+            method_title = (
+                METHOD_SPECS[self.state.selected_table_method].title
+                if self.state.selected_table_method in METHOD_SPECS
+                else "выбранного метода"
+            )
+            self.plot_context_label.setText(
+                f"Сверху показана вся серия для метода {method_title}. "
+                f"Снизу открыт выбранный прогон: ε={current_run.eps:g}, l={current_run.l:g}, "
+                f"вызовов={current_run.result.func_evals}, x*={self._format_float(current_run.result.x_opt)}."
+            )
+        else:
+            method_count = len(report.results_by_method)
+            if method_count > 1:
+                self.plot_context_label.setText(
+                    "На графике показано сравнение методов: каждый подграфик соответствует одному методу."
+                )
+            else:
+                self.plot_context_label.setText("На графике показан выбранный метод и его точки итераций.")
+        self.plot_context_label.show()
 
     def render_last_plot(self) -> None:
         report = self.state.last_report
@@ -1360,21 +1632,35 @@ class ExtremumWindow(QMainWindow):
 
         def build() -> object:
             if report.mode == "grid":
-                current_run = self._selected_grid_run()
-                plot_results = [current_run.result] if current_run is not None else []
+                runs = list(report.grid_runs_by_method.get(self.state.selected_table_method, ()))
+                method_title = (
+                    METHOD_SPECS[self.state.selected_table_method].title
+                    if self.state.selected_table_method in METHOD_SPECS
+                    else "Выбранный метод"
+                )
+                figure = build_grid_plot_figure(
+                    function_spec=report.function_spec,
+                    runs=runs,
+                    selected_index=self.state.selected_grid_run_index,
+                    plot_range=report.plot_range,
+                    method_title=method_title,
+                    reference_x=report.reference_x,
+                    reference_f=report.reference_f,
+                )
             else:
                 plot_results = [
                     report.results_by_method[method_key]
                     for method_key in report.method_keys
                     if method_key in report.results_by_method
                 ]
-            return version, build_plot_figure(
-                function_spec=report.function_spec,
-                results=plot_results,
-                plot_range=report.plot_range,
-                reference_x=report.reference_x,
-                reference_f=report.reference_f,
-            )
+                figure = build_plot_figure(
+                    function_spec=report.function_spec,
+                    results=plot_results,
+                    plot_range=report.plot_range,
+                    reference_x=report.reference_x,
+                    reference_f=report.reference_f,
+                )
+            return version, figure
 
         self._start_worker("Строю график...", build, self._finish_plot_render, "plot")
 
@@ -1388,9 +1674,11 @@ class ExtremumWindow(QMainWindow):
             return
         self._show_plot_placeholder("")
         self.plot_state_label.hide()
+        self._update_plot_context()
         self.plot_canvas = PlotCanvas(figure, self.plot_host)
-        width_px, height_px = figure.get_size_inches() * figure.dpi
-        self.plot_canvas.setMinimumSize(int(width_px), int(height_px))
+        _width_px, height_px = figure.get_size_inches() * figure.dpi
+        self.plot_canvas.setMinimumWidth(0)
+        self.plot_canvas.setFixedHeight(int(height_px))
         self.plot_host_layout.addWidget(self.plot_canvas)
         self.plot_canvas.draw()
 
@@ -1411,6 +1699,7 @@ class ExtremumWindow(QMainWindow):
         self.iterations_tree.clear()
         self.grid_run_list.clear()
         self.grid_run_list.hide()
+        self.grid_runs_caption.hide()
         self._show_plot_placeholder("График появится после расчёта.")
         self._clear_layout(self.table_method_buttons_layout)
         self.table_method_buttons = []
