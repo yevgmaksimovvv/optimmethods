@@ -140,8 +140,8 @@ FUNCTION_TEMPLATE_SPECS = {
         title="Квадратичная",
         formula_hint="f(x) = a·x² + b·x + c",
         coefficients=(
-            CoefficientSpec("a", "a", 10.0),
-            CoefficientSpec("b", "b", -2.0),
+            CoefficientSpec("a", "a", -2.0),
+            CoefficientSpec("b", "b", 10.0),
             CoefficientSpec("c", "c", 3.0),
         ),
         builder=_build_quadratic_spec,

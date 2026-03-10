@@ -25,7 +25,7 @@ def better(v1: float, v2: float, kind: str) -> bool:
 
 
 def compare_left_right(left_val: float, right_val: float, kind: str) -> str:
-    return "right" if better(left_val, right_val, kind) else "left"
+    return "right" if better(right_val, left_val, kind) else "left"
 
 
 def sanitize_interval(
