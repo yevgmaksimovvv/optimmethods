@@ -111,6 +111,12 @@ def dichotomy_search(
         f_mu, used = _safe_eval(func, mu, a, b)
         evals += used
 
+        side = choose_side(f_lam, f_mu, kind)
+        if side == "right":
+            a = lam
+        else:
+            b = mu
+
         rows.append(IterationRow(k, a, b, lam, mu, f_lam, f_mu))
         logger.debug(
             "dichotomy iteration=%d interval=(%.10f, %.10f) lam=%.10f mu=%.10f f_lam=%.10f f_mu=%.10f",
@@ -122,12 +128,6 @@ def dichotomy_search(
             f_lam,
             f_mu,
         )
-
-        side = choose_side(f_lam, f_mu, kind)
-        if side == "right":
-            a = lam
-        else:
-            b = mu
         k += 1
 
     x_opt = (a + b) / 2.0
@@ -346,7 +346,6 @@ def fibonacci_search(
 
     f_mu_n, used = _safe_eval(func, mu_n, a, b)
     evals += used
-    rows.append(IterationRow(k + 1, a, b, lambda_n, mu_n, f_lam, f_mu_n))
 
     if choose_side(f_lam, f_mu_n, kind) == "right":
         a_final = lambda_n
@@ -354,6 +353,7 @@ def fibonacci_search(
     else:
         a_final = a
         b_final = lambda_n
+    rows.append(IterationRow(k + 1, a_final, b_final, lambda_n, mu_n, f_lam, f_mu_n))
 
     x_opt = (a_final + b_final) / 2.0
     f_opt, used = _safe_eval(func, x_opt, a_final, b_final)
