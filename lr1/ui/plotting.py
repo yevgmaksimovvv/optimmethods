@@ -1,3 +1,10 @@
+"""Построение графиков для одиночных и серийных запусков.
+
+Модуль полностью изолирует Matplotlib от остального приложения. На вход он
+получает уже готовые доменные результаты, а на выход отдаёт `Figure`, которую
+UI просто вставляет во вкладку `График`.
+"""
+
 import logging
 import math
 import time
@@ -6,12 +13,9 @@ from typing import Iterable, List, Optional, Sequence, Tuple
 from matplotlib import transforms
 from matplotlib.figure import Figure
 
-if __package__:
-    from .app_models import FunctionSpec, GridRunResult, SearchResult
-    from .logging_setup import configure_logging
-else:
-    from app_models import FunctionSpec, GridRunResult, SearchResult
-    from logging_setup import configure_logging
+from lr1.domain.models import FunctionSpec, GridRunResult, SearchResult
+from lr1.infrastructure.logging import configure_logging
+from lr1.infrastructure.settings import FORBIDDEN_POINT_TOLERANCE
 
 
 configure_logging()
@@ -23,13 +27,18 @@ def _sample_function(
     plot_range: Tuple[float, float],
     samples: int = 1600,
 ) -> Tuple[List[float], List[float]]:
+    """Дискретизирует функцию на диапазоне графика.
+
+    Точки разрыва и нечисловые значения превращаются в `nan`, чтобы линия
+    на графике корректно разрывалась и не соединяла несвязанные куски кривой.
+    """
     left, right = plot_range
     xs: List[float] = []
     ys: List[float] = []
 
     for index in range(samples + 1):
         x = left + (right - left) * index / samples
-        if any(abs(x - point) < 1e-4 for point in function_spec.forbidden_points):
+        if any(abs(x - point) < FORBIDDEN_POINT_TOLERANCE for point in function_spec.forbidden_points):
             xs.append(x)
             ys.append(float("nan"))
             continue
@@ -47,6 +56,7 @@ def _sample_function(
 
 
 def _focus_xlim(result: SearchResult, reference_x: Optional[float]) -> Tuple[float, float]:
+    """Подбирает горизонтальные границы вокруг наиболее важных точек метода."""
     focus_points = [
         result.interval_initial[0],
         result.interval_initial[1],
@@ -68,6 +78,7 @@ def _focus_xlim(result: SearchResult, reference_x: Optional[float]) -> Tuple[flo
 
 
 def _trimmed_bounds(values: Sequence[float]) -> Optional[Tuple[float, float]]:
+    """Обрезает выбросы по краям выборки, чтобы масштаб графика был читабельным."""
     finite_values = sorted(value for value in values if math.isfinite(value))
     if not finite_values:
         return None
@@ -85,6 +96,7 @@ def _focus_ylim(
     result: SearchResult,
     reference_f: Optional[float],
 ) -> Tuple[float, float]:
+    """Подбирает вертикальные границы с учётом выборки и ключевых опорных точек."""
     trimmed = _trimmed_bounds(visible_ys)
     points = [result.f_opt]
     points.extend(row.f_lam for row in result.iterations)
@@ -123,6 +135,7 @@ def _draw_interval_bracket(
     linewidth: float,
     alpha: float,
 ) -> None:
+    """Рисует над графиком скобку, обозначающую исходный или финальный интервал."""
     transform = transforms.blended_transform_factory(axis.transData, axis.transAxes)
     axis.plot(
         [left, right],
@@ -167,6 +180,15 @@ def _plot_single_method(
     reference_x: Optional[float],
     reference_f: Optional[float],
 ) -> None:
+    """Строит подробный график одного метода.
+
+    На нём одновременно показываются:
+    - сама функция;
+    - исходный и финальный интервалы;
+    - все точки `λ` и `μ` по итерациям;
+    - найденный численный результат;
+    - теоретический ориентир, если он известен.
+    """
     x_limits = _focus_xlim(result, reference_x)
     xs, ys = _sample_function(function_spec, x_limits, samples=1200)
     axis.plot(xs, ys, color="#54b9f2", linewidth=2.2, label=function_spec.title, zorder=2)
@@ -280,6 +302,7 @@ def _plot_single_method(
 
 
 def _grid_run_label(run: GridRunResult) -> str:
+    """Готовит компактную подпись столбца в графике серии запусков."""
     return f"ε={run.eps:g}\nl={run.l:g}"
 
 
@@ -289,6 +312,11 @@ def _plot_grid_overview(
     selected_index: int,
     method_title: str,
 ) -> None:
+    """Строит верхний обзорный график для режима серии расчётов.
+
+    Слева по оси показывается стоимость прогона в вызовах функции, справа
+    накладывается линия с найденными значениями `x*`.
+    """
     positions = list(range(len(runs)))
     eval_values = [run.result.func_evals for run in runs]
     x_opt_values = [run.result.x_opt for run in runs]
@@ -354,6 +382,12 @@ def build_grid_plot_figure(
     reference_x: Optional[float] = None,
     reference_f: Optional[float] = None,
 ) -> Figure:
+    """Собирает фигуру для режима серии расчётов.
+
+    Фигура двухэтажная:
+    - сверху обзор по всем прогонам выбранного метода;
+    - снизу детальный график конкретного выбранного прогона.
+    """
     started = time.perf_counter()
     sampled_points = 0
     logger.info(
@@ -419,6 +453,11 @@ def build_plot_figure(
     reference_x: Optional[float] = None,
     reference_f: Optional[float] = None,
 ) -> Figure:
+    """Собирает фигуру для обычного расчёта.
+
+    Если методов несколько, для каждого создаётся отдельный подграфик,
+    чтобы пользователь мог визуально сравнить траектории сужения интервала.
+    """
     started = time.perf_counter()
     results = list(results)
     sampled_points = 0

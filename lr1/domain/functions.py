@@ -1,33 +1,42 @@
+"""Построение функций, доступных в лабораторной работе.
+
+Модуль отвечает за две задачи:
+- собирать вычислимую функцию из набора коэффициентов;
+- заранее извлекать полезную аналитику: стационарные точки и точки разрыва.
+
+Благодаря этому UI и сервисы работают не с "сырыми коэффициентами",
+а с объектом `FunctionSpec`, в котором уже есть всё нужное для расчёта
+и пояснений пользователю.
+"""
+
 import logging
 import math
 from typing import Dict, Iterable, Tuple
 
-if __package__:
-    from .app_models import CoefficientSpec, FunctionSpec, FunctionTemplateSpec
-    from .logging_setup import configure_logging
-else:
-    from app_models import CoefficientSpec, FunctionSpec, FunctionTemplateSpec
-    from logging_setup import configure_logging
+from lr1.domain.models import CoefficientSpec, FunctionSpec, FunctionTemplateSpec
+from lr1.domain.numerical import far_from_all, unique_sorted
+from lr1.infrastructure.logging import configure_logging
+from lr1.infrastructure.settings import DENOMINATOR_TOLERANCE, POLYNOMIAL_TOLERANCE
 
 
 configure_logging()
 logger = logging.getLogger("lr1.function_defs")
 
-EPS = 1e-12
-
 
 def _format_number(value: float) -> str:
+    """Красиво форматирует число для подписи формулы."""
     if abs(value - round(value)) < 1e-10:
         return str(int(round(value)))
     return f"{value:.6g}"
 
 
 def _format_signed_term(value: float, suffix: str, is_first: bool = False) -> str:
-    if abs(value) < EPS:
+    """Формирует одно слагаемое полинома с правильным знаком."""
+    if abs(value) < POLYNOMIAL_TOLERANCE:
         return ""
 
     abs_value = abs(value)
-    coeff = "" if suffix and abs(abs_value - 1.0) < EPS else _format_number(abs_value)
+    coeff = "" if suffix and abs(abs_value - 1.0) < POLYNOMIAL_TOLERANCE else _format_number(abs_value)
     term = f"{coeff}{suffix}"
 
     if is_first:
@@ -37,6 +46,7 @@ def _format_signed_term(value: float, suffix: str, is_first: bool = False) -> st
 
 
 def _format_polynomial(a: float, b: float, c: float) -> str:
+    """Собирает строковое представление квадратного трёхчлена."""
     parts = [
         _format_signed_term(a, "x²", True),
         _format_signed_term(b, "x"),
@@ -46,24 +56,17 @@ def _format_polynomial(a: float, b: float, c: float) -> str:
     return text or "0"
 
 
-def _unique_sorted(values: Iterable[float], tol: float = 1e-9) -> Tuple[float, ...]:
-    result = []
-    for value in sorted(values):
-        if not result or abs(result[-1] - value) > tol:
-            result.append(value)
-    return tuple(result)
-
-
 def solve_real_roots(a: float, b: float, c: float) -> Tuple[float, ...]:
-    if abs(a) < EPS:
-        if abs(b) < EPS:
+    """Находит действительные корни квадратного или линейного уравнения."""
+    if abs(a) < POLYNOMIAL_TOLERANCE:
+        if abs(b) < POLYNOMIAL_TOLERANCE:
             return ()
         return (-c / b,)
 
     discriminant = (b * b) - (4.0 * a * c)
-    if discriminant < -EPS:
+    if discriminant < -POLYNOMIAL_TOLERANCE:
         return ()
-    if abs(discriminant) <= EPS:
+    if abs(discriminant) <= POLYNOMIAL_TOLERANCE:
         return (-b / (2.0 * a),)
 
     sqrt_d = math.sqrt(discriminant)
@@ -71,10 +74,11 @@ def solve_real_roots(a: float, b: float, c: float) -> Tuple[float, ...]:
         (-b - sqrt_d) / (2.0 * a),
         (-b + sqrt_d) / (2.0 * a),
     )
-    return _unique_sorted(roots)
+    return unique_sorted(roots)
 
 
 def _build_quadratic_spec(coefficients: Dict[str, float]) -> FunctionSpec:
+    """Создаёт спецификацию квадратичной функции и её стационарной точки."""
     a = coefficients["a"]
     b = coefficients["b"]
     c = coefficients["c"]
@@ -96,6 +100,12 @@ def _build_quadratic_spec(coefficients: Dict[str, float]) -> FunctionSpec:
 
 
 def _build_rational_spec(coefficients: Dict[str, float]) -> FunctionSpec:
+    """Создаёт спецификацию рациональной функции.
+
+    Помимо самой функции, вычисляет:
+    - действительные корни знаменателя как точки разрыва;
+    - стационарные точки, которые могут быть кандидатами на экстремум.
+    """
     a = coefficients["a"]
     b = coefficients["b"]
     c = coefficients["c"]
@@ -103,18 +113,16 @@ def _build_rational_spec(coefficients: Dict[str, float]) -> FunctionSpec:
     e = coefficients["e"]
     f = coefficients["f"]
 
-    if abs(d) < EPS and abs(e) < EPS and abs(f) < EPS:
+    if abs(d) < POLYNOMIAL_TOLERANCE and abs(e) < POLYNOMIAL_TOLERANCE and abs(f) < POLYNOMIAL_TOLERANCE:
         raise ValueError("Знаменатель не может быть тождественно равен нулю.")
 
     forbidden_points = solve_real_roots(d, e, f)
     derivative_roots = solve_real_roots((a * e) - (b * d), 2.0 * ((a * f) - (c * d)), (b * f) - (c * e))
-    stationary_points = tuple(
-        root for root in derivative_roots if all(abs(root - point) > 1e-9 for point in forbidden_points)
-    )
+    stationary_points = tuple(root for root in derivative_roots if far_from_all(root, forbidden_points))
 
     def func(x: float) -> float:
         den = (d * x * x) + (e * x) + f
-        if abs(den) < 1e-15:
+        if abs(den) < DENOMINATOR_TOLERANCE:
             logger.warning("Rational function undefined at x=%s due to near-zero denominator=%s", x, den)
             raise ZeroDivisionError(f"Function is undefined at x={x}")
         num = (a * x * x) + (b * x) + c
@@ -164,12 +172,18 @@ FUNCTION_TEMPLATE_SPECS = {
 
 
 def build_function_spec(function_key: str, coefficients: Dict[str, float]) -> FunctionSpec:
+    """Строит `FunctionSpec` по выбранному типу функции и коэффициентам."""
     if function_key not in FUNCTION_TEMPLATE_SPECS:
         raise ValueError(f"Неизвестная функция: {function_key}")
     return FUNCTION_TEMPLATE_SPECS[function_key].builder(coefficients)
 
 
 def analytic_comment(function_spec: FunctionSpec, interval: Tuple[float, float], kind: str) -> str:
+    """Формирует короткое текстовое пояснение по теории для выбранной функции.
+
+    Этот текст не влияет на расчёт. Он нужен только для интерфейса,
+    чтобы пользователь видел, откуда вообще берутся кандидаты на экстремум.
+    """
     logger.debug("analytic_comment function=%s interval=%s kind=%s", function_spec.key, interval, kind)
     a, b = interval
     lines = []

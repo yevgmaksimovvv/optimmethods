@@ -1,66 +1,25 @@
+"""Реализации методов одномерного поиска экстремума.
+
+В модуле собраны три алгоритма:
+- дихотомия;
+- золотое сечение;
+- Фибоначчи.
+"""
+
 import logging
 import math
 import time
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List
 
-if __package__:
-    from .app_models import IterationRow, MethodSpec, SearchResult
-    from .logging_setup import configure_logging
-else:
-    from app_models import IterationRow, MethodSpec, SearchResult
-    from logging_setup import configure_logging
+from lr1.domain.models import IterationRow, MethodSpec, SearchResult
+from lr1.domain.numerical import choose_side, sanitize_interval as sanitize_interval
+from lr1.infrastructure.logging import configure_logging
 
 
 configure_logging()
 logger = logging.getLogger("lr1.search_methods")
 
 
-def better(v1: float, v2: float, kind: str) -> bool:
-    logger.debug("better compare kind=%s v1=%s v2=%s", kind, v1, v2)
-    if kind == "max":
-        return v1 > v2
-    if kind == "min":
-        return v1 < v2
-    raise ValueError("Тип поиска должен быть 'max' или 'min'")
-
-
-def compare_left_right(left_val: float, right_val: float, kind: str) -> str:
-    return "right" if better(right_val, left_val, kind) else "left"
-
-
-def sanitize_interval(
-    a: float,
-    b: float,
-    forbidden_points: Optional[List[float]] = None,
-    shift: float = 1e-8,
-) -> Tuple[float, float]:
-    logger.debug(
-        "sanitize_interval start a=%s b=%s forbidden_points=%s shift=%s",
-        a,
-        b,
-        forbidden_points,
-        shift,
-    )
-    if a >= b:
-        raise ValueError(f"Invalid interval [{a}, {b}]")
-
-    forbidden_points = forbidden_points or []
-    for point in forbidden_points:
-        if a < point < b:
-            raise ValueError(
-                f"Интервал [{a}, {b}] содержит точку разрыва x={point}. "
-                "Выбирай интервал только по одну сторону от разрыва."
-            )
-        if abs(a - point) < 1e-15:
-            a += shift
-        if abs(b - point) < 1e-15:
-            b -= shift
-
-    if a >= b:
-        raise ValueError("Интервал схлопнулся после сдвига границ.")
-
-    logger.debug("sanitize_interval result a=%s b=%s", a, b)
-    return a, b
 def dichotomy_search(
     func,
     a: float,
@@ -69,6 +28,14 @@ def dichotomy_search(
     l: float,
     kind: str = "max",
 ) -> SearchResult:
+    """Реализация метода дихотомии.
+
+    Идея метода:
+    - на каждом шаге берётся середина текущего интервала;
+    - рядом с серединой выбираются две точки `λ = mid - ε` и `μ = mid + ε`;
+    - по значениям функции в этих точках выбирается половина интервала,
+      которая содержит лучший экстремум.
+    """
     started = time.perf_counter()
     logger.info("dichotomy_search start a=%s b=%s eps=%s l=%s kind=%s", a, b, eps, l, kind)
     if eps <= 0:
@@ -103,7 +70,7 @@ def dichotomy_search(
             f_mu,
         )
 
-        side = compare_left_right(f_lam, f_mu, kind)
+        side = choose_side(f_lam, f_mu, kind)
         if side == "right":
             a = lam
         else:
@@ -143,10 +110,15 @@ def golden_section_search(
     l: float,
     kind: str = "max",
 ) -> SearchResult:
+    """Реализация метода золотого сечения в классическом виде.
+
+    Метод использует фиксированное отношение точек внутри интервала,
+    благодаря чему на каждом шаге можно переиспользовать одну из старых
+    пробных точек и вычислять только одно новое значение функции.
+    """
     started = time.perf_counter()
     logger.info("golden_section_search start a=%s b=%s eps=%s l=%s kind=%s", a, b, eps, l, kind)
     del eps
-
     if l <= 0:
         raise ValueError("Параметр l должен быть больше 0")
 
@@ -175,7 +147,7 @@ def golden_section_search(
             f_mu,
         )
 
-        side = compare_left_right(f_lam, f_mu, kind)
+        side = choose_side(f_lam, f_mu, kind)
         if side == "right":
             a = lam
             lam = mu
@@ -218,6 +190,7 @@ def golden_section_search(
 
 
 def fibonacci_numbers_until(limit: float) -> List[int]:
+    """Генерирует числа Фибоначчи до первого значения, не меньшего `limit`."""
     logger.debug("fibonacci_numbers_until limit=%s", limit)
     fib = [0, 1, 1]
     while fib[-1] < limit:
@@ -234,6 +207,12 @@ def fibonacci_search(
     l: float,
     kind: str = "max",
 ) -> SearchResult:
+    """Реализация метода Фибоначчи.
+
+    Метод похож на золотое сечение, но длины шагов задаются отношениями
+    соседних чисел Фибоначчи. Это позволяет заранее оценить число итераций
+    для заданной длины конечного интервала `l`.
+    """
     started = time.perf_counter()
     logger.info("fibonacci_search start a=%s b=%s eps=%s l=%s kind=%s", a, b, eps, l, kind)
     if l <= 0:
@@ -290,7 +269,7 @@ def fibonacci_search(
             f_mu,
         )
 
-        side = compare_left_right(f_lam, f_mu, kind)
+        side = choose_side(f_lam, f_mu, kind)
         if side == "right":
             a = lam
             lam = mu
@@ -314,7 +293,7 @@ def fibonacci_search(
     f_mu_n = func(mu_n)
     evals += 1
 
-    if compare_left_right(f_lam, f_mu_n, kind) == "right":
+    if choose_side(f_lam, f_mu_n, kind) == "right":
         a_final = lambda_n
         b_final = b
     else:
@@ -365,5 +344,3 @@ METHOD_SPECS: Dict[str, MethodSpec] = {
         runner=fibonacci_search,
     ),
 }
-
-logger.debug("Search methods registered order=%s", METHOD_ORDER)
