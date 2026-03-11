@@ -18,6 +18,7 @@ from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QGroupBox,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QListWidget,
@@ -42,6 +43,7 @@ from lr1.application.viewmodels import (
     build_plot_context,
     build_summary_view_model,
     format_float,
+    format_interval,
 )
 from lr1.domain.models import GridRunResult, RunReport, SearchResult
 from lr1.domain.search import METHOD_SPECS
@@ -376,6 +378,47 @@ class IterationsTab(QWidget):
         layout.addWidget(self.grid_runs_caption)
         layout.addWidget(self.grid_run_list)
         layout.addWidget(self.iterations_tree_holder)
+        self.final_result_card = QWidget()
+        self.final_result_card.setObjectName("FinalResultCard")
+        final_layout = QVBoxLayout(self.final_result_card)
+        final_layout.setContentsMargins(14, 12, 14, 12)
+        final_layout.setSpacing(8)
+
+        self.final_result_title = QLabel("Итог расчёта")
+        self.final_result_title.setObjectName("FinalResultTitle")
+        final_layout.addWidget(self.final_result_title)
+
+        final_grid = QGridLayout()
+        final_grid.setContentsMargins(0, 0, 0, 0)
+        final_grid.setHorizontalSpacing(12)
+        final_grid.setVerticalSpacing(6)
+
+        self.final_interval_caption = QLabel("Финальный интервал:")
+        self.final_interval_caption.setProperty("role", "final-result-caption")
+        self.final_interval_value = QLabel("—")
+        self.final_interval_value.setProperty("role", "final-result-value")
+
+        self.final_x_caption = QLabel("Оптимальный x* =")
+        self.final_x_caption.setProperty("role", "final-result-caption")
+        self.final_x_value = QLabel("—")
+        self.final_x_value.setProperty("role", "final-result-value")
+
+        self.final_f_caption = QLabel("Оптимальное значение F(x*) =")
+        self.final_f_caption.setProperty("role", "final-result-caption")
+        self.final_f_value = QLabel("—")
+        self.final_f_value.setProperty("role", "final-result-value")
+
+        final_grid.addWidget(self.final_interval_caption, 0, 0)
+        final_grid.addWidget(self.final_interval_value, 0, 1)
+        final_grid.addWidget(self.final_x_caption, 1, 0)
+        final_grid.addWidget(self.final_x_value, 1, 1)
+        final_grid.addWidget(self.final_f_caption, 2, 0)
+        final_grid.addWidget(self.final_f_value, 2, 1)
+        final_grid.setColumnStretch(1, 1)
+        final_layout.addLayout(final_grid)
+
+        self._set_final_result_text(None)
+        layout.addWidget(self.final_result_card)
         layout.addStretch(1)
 
     def resizeEvent(self, event) -> None:
@@ -512,6 +555,7 @@ class IterationsTab(QWidget):
         """
         self.iterations_tree.clear()
         if result is None:
+            self._set_final_result_text(None)
             _fit_tree_height(self.iterations_tree)
             return
 
@@ -538,6 +582,18 @@ class IterationsTab(QWidget):
 
         _resize_tree_columns_proportionally(self.iterations_tree)
         _fit_tree_height(self.iterations_tree)
+        self._set_final_result_text(result)
+
+    def _set_final_result_text(self, result: Optional[SearchResult]) -> None:
+        """Обновляет блок с финальными итогами текущего расчёта."""
+        if result is None:
+            self.final_interval_value.setText("—")
+            self.final_x_value.setText("—")
+            self.final_f_value.setText("—")
+            return
+        self.final_interval_value.setText(format_interval(result.interval_final))
+        self.final_x_value.setText(format_float(result.x_opt))
+        self.final_f_value.setText(format_float(result.f_opt))
 
     def clear(self) -> None:
         """Очищает все элементы вкладки до исходного пустого состояния."""
@@ -545,6 +601,7 @@ class IterationsTab(QWidget):
         self.grid_run_list.clear()
         self.grid_run_list.hide()
         self.grid_runs_caption.hide()
+        self._set_final_result_text(None)
         self.rebuild_method_buttons(None, "")
 
 

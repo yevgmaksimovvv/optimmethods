@@ -9,15 +9,67 @@
 import logging
 import math
 import time
-from typing import Dict, List
+from typing import Dict, List, Tuple
 
 from lr1.domain.models import IterationRow, MethodSpec, SearchResult
-from lr1.domain.numerical import choose_side, sanitize_interval as sanitize_interval
+from lr1.domain.numerical import choose_side, scaled_interval_shift
 from lr1.infrastructure.logging import configure_logging
 
 
 configure_logging()
 logger = logging.getLogger("lr1.search_methods")
+
+
+def _safe_eval(
+    func,
+    x: float,
+    a: float,
+    b: float,
+    max_retries: int = 16,
+) -> Tuple[float, int]:
+    """Вычисляет `func(x)`, а при разрыве пробует соседние точки внутри интервала."""
+    interval_span = b - a
+    base_shift = max(1e-12, min(scaled_interval_shift(a, b), interval_span / 16.0))
+    attempts = 1
+    try:
+        return func(x), attempts
+    except ZeroDivisionError:
+        logger.debug(
+            "safe_eval undefined at x=%.12f in interval=(%.12f, %.12f), trying neighbours with base_shift=%s",
+            x,
+            a,
+            b,
+            base_shift,
+        )
+
+    for retry in range(max_retries):
+        delta = base_shift * (2.0 ** retry)
+        left = x - delta
+        right = x + delta
+        candidates = []
+        if a < left < b:
+            candidates.append(left)
+        if a < right < b:
+            candidates.append(right)
+
+        for candidate in candidates:
+            attempts += 1
+            try:
+                value = func(candidate)
+                logger.debug(
+                    "safe_eval fallback used x=%.12f for requested x=%.12f after %d attempts",
+                    candidate,
+                    x,
+                    attempts,
+                )
+                return value, attempts
+            except ZeroDivisionError:
+                continue
+
+    raise ValueError(
+        f"Не удалось вычислить функцию около x={x:.12g} на интервале [{a:.12g}, {b:.12g}] "
+        "из-за точки разрыва."
+    )
 
 
 def dichotomy_search(
@@ -54,9 +106,10 @@ def dichotomy_search(
         mid = (a + b) / 2.0
         lam = mid - eps
         mu = mid + eps
-        f_lam = func(lam)
-        f_mu = func(mu)
-        evals += 2
+        f_lam, used = _safe_eval(func, lam, a, b)
+        evals += used
+        f_mu, used = _safe_eval(func, mu, a, b)
+        evals += used
 
         rows.append(IterationRow(k, a, b, lam, mu, f_lam, f_mu))
         logger.debug(
@@ -78,8 +131,8 @@ def dichotomy_search(
         k += 1
 
     x_opt = (a + b) / 2.0
-    f_opt = func(x_opt)
-    evals += 1
+    f_opt, used = _safe_eval(func, x_opt, a, b)
+    evals += used
 
     result = SearchResult(
         method="Дихотомия",
@@ -129,13 +182,13 @@ def golden_section_search(
 
     lam = b - (b - a) / phi
     mu = a + (b - a) / phi
-    f_lam = func(lam)
-    f_mu = func(mu)
-    evals += 2
+    f_lam, used = _safe_eval(func, lam, a, b)
+    evals += used
+    f_mu, used = _safe_eval(func, mu, a, b)
+    evals += used
     k = 1
-
+    rows.append(IterationRow(k, a, b, lam, mu, f_lam, f_mu))
     while (b - a) > l:
-        rows.append(IterationRow(k, a, b, lam, mu, f_lam, f_mu))
         logger.debug(
             "golden iteration=%d interval=(%.10f, %.10f) lam=%.10f mu=%.10f f_lam=%.10f f_mu=%.10f",
             k,
@@ -153,20 +206,21 @@ def golden_section_search(
             lam = mu
             f_lam = f_mu
             mu = a + (b - a) / phi
-            f_mu = func(mu)
-            evals += 1
+            f_mu, used = _safe_eval(func, mu, a, b)
+            evals += used
         else:
             b = mu
             mu = lam
             f_mu = f_lam
             lam = b - (b - a) / phi
-            f_lam = func(lam)
-            evals += 1
+            f_lam, used = _safe_eval(func, lam, a, b)
+            evals += used
         k += 1
+        rows.append(IterationRow(k, a, b, lam, mu, f_lam, f_mu))
 
     x_opt = (a + b) / 2.0
-    f_opt = func(x_opt)
-    evals += 1
+    f_opt, used = _safe_eval(func, x_opt, a, b)
+    evals += used
 
     result = SearchResult(
         method="Золотое сечение",
@@ -230,14 +284,14 @@ def fibonacci_search(
 
     if n < 3:
         x_opt = (a + b) / 2.0
-        f_opt = func(x_opt)
+        f_opt, used = _safe_eval(func, x_opt, a, b)
         result = SearchResult(
             method="Фибоначчи",
             kind=kind,
             x_opt=x_opt,
             f_opt=f_opt,
             iterations=[],
-            func_evals=1,
+            func_evals=used,
             interval_initial=initial,
             interval_final=(a, b),
         )
@@ -251,13 +305,13 @@ def fibonacci_search(
 
     lam = a + (fib[n - 2] / fib[n]) * (b - a)
     mu = a + (fib[n - 1] / fib[n]) * (b - a)
-    f_lam = func(lam)
-    f_mu = func(mu)
-    evals += 2
-
+    f_lam, used = _safe_eval(func, lam, a, b)
+    evals += used
+    f_mu, used = _safe_eval(func, mu, a, b)
+    evals += used
     k = 1
+    rows.append(IterationRow(k, a, b, lam, mu, f_lam, f_mu))
     for i in range(1, n - 2):
-        rows.append(IterationRow(k, a, b, lam, mu, f_lam, f_mu))
         logger.debug(
             "fibonacci iteration=%d interval=(%.10f, %.10f) lam=%.10f mu=%.10f f_lam=%.10f f_mu=%.10f",
             k,
@@ -275,23 +329,24 @@ def fibonacci_search(
             lam = mu
             f_lam = f_mu
             mu = a + (fib[n - i - 1] / fib[n - i]) * (b - a)
-            f_mu = func(mu)
-            evals += 1
+            f_mu, used = _safe_eval(func, mu, a, b)
+            evals += used
         else:
             b = mu
             mu = lam
             f_mu = f_lam
             lam = a + (fib[n - i - 2] / fib[n - i]) * (b - a)
-            f_lam = func(lam)
-            evals += 1
+            f_lam, used = _safe_eval(func, lam, a, b)
+            evals += used
         k += 1
+        rows.append(IterationRow(k, a, b, lam, mu, f_lam, f_mu))
 
-    rows.append(IterationRow(k, a, b, lam, mu, f_lam, f_mu))
     lambda_n = lam
     mu_n = lambda_n + eps
 
-    f_mu_n = func(mu_n)
-    evals += 1
+    f_mu_n, used = _safe_eval(func, mu_n, a, b)
+    evals += used
+    rows.append(IterationRow(k + 1, a, b, lambda_n, mu_n, f_lam, f_mu_n))
 
     if choose_side(f_lam, f_mu_n, kind) == "right":
         a_final = lambda_n
@@ -301,9 +356,8 @@ def fibonacci_search(
         b_final = lambda_n
 
     x_opt = (a_final + b_final) / 2.0
-    f_opt = func(x_opt)
-    evals += 1
-
+    f_opt, used = _safe_eval(func, x_opt, a_final, b_final)
+    evals += used
     result = SearchResult(
         method="Фибоначчи",
         kind=kind,

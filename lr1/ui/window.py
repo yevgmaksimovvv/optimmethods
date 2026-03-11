@@ -289,6 +289,29 @@ class ExtremumWindow(QMainWindow):
                 font-size: 14px;
                 padding: 4px 2px;
             }
+            QWidget#FinalResultCard {
+                background: #181b24;
+                border: 1px solid #31384a;
+                border-radius: 12px;
+                min-height: 132px;
+            }
+            QLabel#FinalResultTitle {
+                color: #d5e3ff;
+                font-size: 13px;
+                font-weight: 800;
+                letter-spacing: 0.04em;
+                text-transform: uppercase;
+            }
+            QLabel[role="final-result-caption"] {
+                color: #9aa5bb;
+                font-size: 14px;
+                font-weight: 700;
+            }
+            QLabel[role="final-result-value"] {
+                color: #eef2f8;
+                font-size: 16px;
+                font-weight: 700;
+            }
             QLabel#SectionCaption {
                 color: #9aa5bb;
                 font-size: 12px;

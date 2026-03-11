@@ -22,6 +22,15 @@ configure_logging()
 logger = logging.getLogger("lr1.plotting")
 
 
+def _probe_iterations(result: SearchResult) -> List:
+    """Возвращает только рабочие итерации с пробными точками λ и μ.
+
+    Фильтр `k > 0` сохраняет совместимость со старыми результатами, где
+    могли присутствовать служебные строки с `k <= 0`.
+    """
+    return [row for row in result.iterations if row.k > 0]
+
+
 def _sample_function(
     function_spec: FunctionSpec,
     plot_range: Tuple[float, float],
@@ -98,9 +107,10 @@ def _focus_ylim(
 ) -> Tuple[float, float]:
     """Подбирает вертикальные границы с учётом выборки и ключевых опорных точек."""
     trimmed = _trimmed_bounds(visible_ys)
+    probe_rows = _probe_iterations(result)
     points = [result.f_opt]
-    points.extend(row.f_lam for row in result.iterations)
-    points.extend(row.f_mu for row in result.iterations)
+    points.extend(row.f_lam for row in probe_rows)
+    points.extend(row.f_mu for row in probe_rows)
     if reference_f is not None and math.isfinite(reference_f):
         points.append(reference_f)
 
@@ -220,11 +230,12 @@ def _plot_single_method(
         alpha=0.95,
     )
 
-    if result.iterations:
-        lam_x = [row.lam for row in result.iterations]
-        lam_y = [row.f_lam for row in result.iterations]
-        mu_x = [row.mu for row in result.iterations]
-        mu_y = [row.f_mu for row in result.iterations]
+    probe_rows = _probe_iterations(result)
+    if probe_rows:
+        lam_x = [row.lam for row in probe_rows]
+        lam_y = [row.f_lam for row in probe_rows]
+        mu_x = [row.mu for row in probe_rows]
+        mu_y = [row.f_mu for row in probe_rows]
 
         axis.plot(lam_x, lam_y, color="#0f6cbd", linewidth=1.7, alpha=1.0, zorder=3)
         axis.plot(mu_x, mu_y, color="#ff8c32", linewidth=1.7, alpha=1.0, zorder=3)

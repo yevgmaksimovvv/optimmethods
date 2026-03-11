@@ -151,7 +151,7 @@ def run_single(config: InputConfig) -> RunReport:
                 config.l,
                 config.kind,
             )
-        except ValueError as method_error:
+        except (ValueError, ZeroDivisionError) as method_error:
             logger.warning("run_single method=%s failed error=%s", method_key, method_error)
             continue
 
@@ -242,7 +242,7 @@ def run_full_grid(config: InputConfig) -> RunReport:
                         l,
                         config.kind,
                     )
-                except ValueError as method_error:
+                except (ValueError, ZeroDivisionError) as method_error:
                     logger.warning(
                         "run_full_grid method=%s failed eps=%s l=%s error=%s",
                         method_key,

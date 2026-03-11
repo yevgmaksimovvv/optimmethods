@@ -53,8 +53,7 @@ def sanitize_interval(
 
     Функция нужна для работы с рациональными функциями, у которых есть точки
     разрыва. Если граница интервала совпадает с такой точкой, граница
-    аккуратно сдвигается внутрь. Если разрыв попадает внутрь интервала,
-    выбрасывается ошибка.
+    аккуратно сдвигается внутрь.
     """
     logger.debug(
         "sanitize_interval start a=%s b=%s forbidden_points=%s shift=%s",
@@ -67,11 +66,6 @@ def sanitize_interval(
         raise ValueError(f"Invalid interval [{a}, {b}]")
 
     for point in forbidden_points or ():
-        if a < point < b:
-            raise ValueError(
-                f"Интервал [{a}, {b}] содержит точку разрыва x={point}. "
-                "Выбирай интервал только по одну сторону от разрыва."
-            )
         if abs(a - point) < ROOT_TOLERANCE:
             a += shift
         if abs(b - point) < ROOT_TOLERANCE:
