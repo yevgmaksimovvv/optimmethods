@@ -207,3 +207,4 @@ marimo/_lsp/
 __marimo__/
 AGENTS.md
 .DS_Store
+report/lr2_runs/*

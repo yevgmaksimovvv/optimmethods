@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import csv
 import sys
+from datetime import datetime
+from pathlib import Path
 
 import matplotlib as mpl
 import numpy as np
@@ -53,6 +56,7 @@ START_INPUT_WIDTH = 64
 CONTROL_BUTTON_SIZE = 44
 ROW_CONTROL_SPACING = 4
 START_SEPARATOR_WIDTH = 12
+ARTIFACTS_BASE_DIR = Path("report") / "lr2_runs"
 MATPLOTLIB_DARK_RC = {
     "figure.facecolor": "#171b24",
     "axes.facecolor": "#10141f",
@@ -787,6 +791,11 @@ class RosenbrockWindow(QMainWindow):
         self.steps_table.setRowCount(0)
         self._set_steps_table_empty_layout()
         self._clear_plot()
+        try:
+            artifacts_dir = self._save_artifacts(batch_result, trace_id=metrics.trace_id)
+            QMessageBox.information(self, "Артефакты сохранены", f"Папка: {artifacts_dir}")
+        except Exception as exc:
+            QMessageBox.warning(self, "Сохранение артефактов", f"Не удалось сохранить артефакты: {exc}")
 
         if batch_result.runs:
             self.summary_table.selectRow(0)
@@ -1201,6 +1210,192 @@ class RosenbrockWindow(QMainWindow):
                     text.set_color("#e8f0ff")
 
         self.canvas.draw_idle()
+
+    def _save_artifacts(self, batch_result: BatchResult, trace_id: str) -> Path:
+        run_dir = self._create_artifacts_dir(trace_id)
+        formula_text = format_polynomial(batch_result.polynomial)
+        self._write_summary_csv(run_dir / "summary.csv", batch_result)
+        (run_dir / "formula.txt").write_text(f"Формула: {formula_text}\n", encoding="utf-8")
+
+        for run_index, run in enumerate(batch_result.runs, start=1):
+            single_dir = run_dir / f"run_{run_index:03d}"
+            single_dir.mkdir(parents=True, exist_ok=True)
+            self._write_iterations_csv(single_dir / "iterations.csv", run)
+            self._save_run_plot_png(batch_result, run, mode="contour", output_path=single_dir / "contour.png")
+            self._save_run_plot_png(batch_result, run, mode="surface", output_path=single_dir / "surface.png")
+
+        return run_dir
+
+    def _create_artifacts_dir(self, trace_id: str) -> Path:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        base_name = f"{timestamp}_{trace_id}"
+        ARTIFACTS_BASE_DIR.mkdir(parents=True, exist_ok=True)
+        candidate = ARTIFACTS_BASE_DIR / base_name
+        suffix = 1
+        while candidate.exists():
+            candidate = ARTIFACTS_BASE_DIR / f"{base_name}_{suffix:02d}"
+            suffix += 1
+        candidate.mkdir(parents=True, exist_ok=False)
+        return candidate
+
+    def _write_summary_csv(self, path: Path, batch_result: BatchResult) -> None:
+        with path.open("w", encoding="utf-8-sig", newline="") as csvfile:
+            writer = csv.writer(csvfile, delimiter=",")
+            writer.writerow(["#", "epsilon", "start", "x*", "f(x*)", "N", "status"])
+            for index, run in enumerate(batch_result.runs, start=1):
+                writer.writerow(
+                    [
+                        index,
+                        f"{run.epsilon:.6g}",
+                        self._format_point(run.start_point),
+                        self._format_point(run.optimum_point),
+                        f"{run.optimum_value:.8g}",
+                        run.iterations_count,
+                        "OK" if run.success else "MAX_ITER",
+                    ]
+                )
+
+    def _write_iterations_csv(self, path: Path, run: SolverResult) -> None:
+        with path.open("w", encoding="utf-8-sig", newline="") as csvfile:
+            writer = csv.writer(csvfile, delimiter=",")
+            writer.writerow(["K", "x_k", "F(x_k)", "j", "d_j", "y_j", "f(y_j)", "λ_j", "y_{j+1}", "f(y_{j+1})"])
+            for step in run.steps:
+                writer.writerow(
+                    [
+                        step.k,
+                        self._format_point(step.x_k),
+                        f"{step.f_x_k:.8g}",
+                        step.j,
+                        self._format_point(step.direction),
+                        self._format_point(step.y_j),
+                        f"{step.f_y_j:.8g}",
+                        f"{step.lambda_j:.8g}",
+                        self._format_point(step.y_next),
+                        f"{step.f_y_next:.8g}",
+                    ]
+                )
+
+    def _save_run_plot_png(self, batch_result: BatchResult, run: SolverResult, mode: str, output_path: Path) -> None:
+        points = np.array(run.trajectory)
+        if points.ndim != 2 or points.shape[1] != 2:
+            return
+
+        x_vals = points[:, 0]
+        y_vals = points[:, 1]
+        x_min = float(np.min(x_vals))
+        x_max = float(np.max(x_vals))
+        y_min = float(np.min(y_vals))
+        y_max = float(np.max(y_vals))
+        span_x = max(x_max - x_min, 1.0)
+        span_y = max(y_max - y_min, 1.0)
+        margin_x = span_x * 0.6
+        margin_y = span_y * 0.6
+
+        grid_x = np.linspace(x_min - margin_x, x_max + margin_x, 120)
+        grid_y = np.linspace(y_min - margin_y, y_max + margin_y, 120)
+        mesh_x, mesh_y = np.meshgrid(grid_x, grid_y)
+        mesh_z = self._evaluate_mesh(batch_result, mesh_x, mesh_y)
+
+        with mpl.rc_context(MATPLOTLIB_DARK_RC):
+            figure = Figure(figsize=(9.0, 6.0), dpi=120)
+            figure.patch.set_facecolor("#171b24")
+            if mode == "surface":
+                ax_surface = figure.add_subplot(1, 1, 1, projection="3d")
+                z_clipped = np.clip(mesh_z, np.nanpercentile(mesh_z, 5), np.nanpercentile(mesh_z, 95))
+                ax_surface.plot_surface(
+                    mesh_x,
+                    mesh_y,
+                    z_clipped,
+                    cmap="turbo",
+                    alpha=0.72,
+                    linewidth=0,
+                    antialiased=True,
+                )
+                path_z = [evaluate_polynomial(batch_result.polynomial, point[0], point[1]) for point in run.trajectory]
+                z_span = max(float(np.nanmax(z_clipped) - np.nanmin(z_clipped)), 1.0)
+                z_offset = z_span * 0.08
+                lifted_path_z = [value + z_offset for value in path_z]
+                ax_surface.plot(
+                    x_vals,
+                    y_vals,
+                    lifted_path_z,
+                    color="#121722",
+                    linewidth=7.0,
+                    marker="o",
+                    markersize=6.6,
+                    markerfacecolor="#121722",
+                    markeredgewidth=0.0,
+                )
+                ax_surface.plot(
+                    x_vals,
+                    y_vals,
+                    lifted_path_z,
+                    color="#ff2d95",
+                    linewidth=4.2,
+                    marker="o",
+                    markersize=5.2,
+                    markerfacecolor="#ff4f87",
+                    markeredgecolor="#ffffff",
+                    markeredgewidth=1.0,
+                )
+                ax_surface.scatter(
+                    [x_vals[0]],
+                    [y_vals[0]],
+                    [lifted_path_z[0]],
+                    color="#2da3ff",
+                    edgecolors="#ffffff",
+                    linewidths=1.0,
+                    s=130,
+                    depthshade=False,
+                )
+                ax_surface.scatter(
+                    [x_vals[-1]],
+                    [y_vals[-1]],
+                    [lifted_path_z[-1]],
+                    color="#57d773",
+                    edgecolors="#ffffff",
+                    linewidths=1.0,
+                    s=130,
+                    depthshade=False,
+                )
+                ax_surface.set_title("3D поверхность + траектория")
+                ax_surface.set_xlabel("x1")
+                ax_surface.set_ylabel("x2")
+                ax_surface.set_zlabel("f(x1, x2)")
+                ax_surface.xaxis.pane.set_facecolor((0.12, 0.16, 0.23, 0.45))
+                ax_surface.yaxis.pane.set_facecolor((0.12, 0.16, 0.23, 0.45))
+                ax_surface.zaxis.pane.set_facecolor((0.12, 0.16, 0.23, 0.45))
+                ax_surface.tick_params(colors="#c4cfdf")
+                ax_surface.set_zlim(float(np.nanmin(z_clipped)), float(np.nanmax(z_clipped) + z_offset * 1.5))
+                ax_surface.view_init(elev=34, azim=-44)
+            else:
+                ax_contour = figure.add_subplot(1, 1, 1)
+                contour = ax_contour.contour(mesh_x, mesh_y, mesh_z, levels=24, cmap="turbo")
+                ax_contour.set_facecolor("#10141f")
+                ax_contour.clabel(contour, inline=True, fontsize=8, colors="#dce6f5")
+                ax_contour.plot(
+                    x_vals,
+                    y_vals,
+                    marker="o",
+                    color="#ffffff",
+                    linewidth=3.1,
+                    markersize=4.5,
+                    markerfacecolor="#ff4f87",
+                    markeredgewidth=0.0,
+                    zorder=3,
+                )
+                ax_contour.scatter([x_vals[0]], [y_vals[0]], color="#2da3ff", s=100, label="Старт", zorder=4)
+                ax_contour.scatter([x_vals[-1]], [y_vals[-1]], color="#57d773", s=100, label="Финиш", zorder=4)
+                ax_contour.set_title("Линии уровня + траектория")
+                ax_contour.set_xlabel("x1")
+                ax_contour.set_ylabel("x2")
+                ax_contour.set_aspect("equal", adjustable="box")
+                ax_contour.grid(True)
+                legend = ax_contour.legend(loc="upper right", framealpha=0.92)
+                for text in legend.get_texts():
+                    text.set_color("#e8f0ff")
+
+            figure.savefig(output_path, dpi=120, bbox_inches="tight")
 
     def _evaluate_mesh(self, batch_result: BatchResult, mesh_x: np.ndarray, mesh_y: np.ndarray) -> np.ndarray:
         polynomial = batch_result.polynomial
