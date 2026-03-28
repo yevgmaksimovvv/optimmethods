@@ -19,10 +19,8 @@ def _config(epsilon: float) -> SolverConfig:
     return SolverConfig(
         epsilon=epsilon,
         max_iterations=int(DEFAULT_SOLVER_CONFIG["max_iterations"]),
-        line_search_initial_step=float(DEFAULT_SOLVER_CONFIG["line_search_initial_step"]),
-        line_search_growth=float(DEFAULT_SOLVER_CONFIG["line_search_growth"]),
-        line_search_max_expand=int(DEFAULT_SOLVER_CONFIG["line_search_max_expand"]),
-        line_search_samples=int(DEFAULT_SOLVER_CONFIG["line_search_samples"]),
+        line_search_min_lambda=float(DEFAULT_SOLVER_CONFIG["line_search_min_lambda"]),
+        line_search_max_lambda=float(DEFAULT_SOLVER_CONFIG["line_search_max_lambda"]),
         line_search_tolerance=float(DEFAULT_SOLVER_CONFIG["line_search_tolerance"]),
         line_search_max_iterations=int(DEFAULT_SOLVER_CONFIG["line_search_max_iterations"]),
         direction_zero_tolerance=float(DEFAULT_SOLVER_CONFIG["direction_zero_tolerance"]),
@@ -66,7 +64,7 @@ BENCHMARK_CASES = (
         expected_value=-481.0,
         tolerance_point=5e-2,
         tolerance_value=2e-1,
-        iteration_budget={0.1: 3, 0.01: 3, 0.001: 3},
+        iteration_budget={0.1: 14, 0.01: 14, 0.001: 14},
     ),
     BenchmarkCase(
         key="booth",
@@ -83,7 +81,7 @@ BENCHMARK_CASES = (
         expected_value=0.0,
         tolerance_point=2e-2,
         tolerance_value=1e-4,
-        iteration_budget={0.1: 6, 0.01: 8, 0.001: 8},
+        iteration_budget={0.1: 17, 0.01: 19, 0.001: 21},
     ),
     BenchmarkCase(
         key="matyas",
@@ -100,7 +98,7 @@ BENCHMARK_CASES = (
         expected_value=0.0,
         tolerance_point=2e-2,
         tolerance_value=1e-4,
-        iteration_budget={0.1: 6, 0.01: 7, 0.001: 8},
+        iteration_budget={0.1: 24, 0.01: 24, 0.001: 25},
     ),
     BenchmarkCase(
         key="rosenbrock_classic",
@@ -119,7 +117,7 @@ BENCHMARK_CASES = (
         expected_value=0.0,
         tolerance_point=8e-2,
         tolerance_value=5e-2,
-        iteration_budget={0.1: 5, 0.01: 35, 0.001: 35},
+        iteration_budget={0.1: 3, 0.01: 25, 0.001: 26},
     ),
     BenchmarkCase(
         key="himmelblau",
@@ -138,7 +136,7 @@ BENCHMARK_CASES = (
         expected_value=0.0,
         tolerance_point=9e-2,
         tolerance_value=2e-3,
-        iteration_budget={0.1: 5, 0.01: 6, 0.001: 7},
+        iteration_budget={0.1: 9, 0.01: 9, 0.001: 11},
     ),
 )
 
@@ -222,3 +220,22 @@ def test_rosenbrock_rejects_invalid_dimension() -> None:
             start_point=(1.0,),
             config=_config(1e-3),
         )
+
+
+def test_rosenbrock_uses_hard_lambda_bounds_without_expansion() -> None:
+    polynomial = build_polynomial("F2", VARIANT_PRESETS["variant_f2"])
+
+    def objective(vector: Vector) -> float:
+        return evaluate_polynomial(polynomial, vector[0], vector[1])
+
+    result = rosenbrock_minimize(
+        objective=objective,
+        start_point=(-8.0, 10.0),
+        config=_config(1e-3),
+    )
+
+    assert result.steps
+    min_lambda = float(DEFAULT_SOLVER_CONFIG["line_search_min_lambda"])
+    max_lambda = float(DEFAULT_SOLVER_CONFIG["line_search_max_lambda"])
+    assert all(min_lambda <= step.lambda_j <= max_lambda for step in result.steps)
+    assert result.steps[0].lambda_j == pytest.approx(max_lambda, abs=1e-3)

@@ -28,10 +28,8 @@ class ServiceMetrics:
 
 DEFAULT_SOLVER_CONFIG: dict[str, int | float] = {
     "max_iterations": 200,
-    "line_search_initial_step": 0.5,
-    "line_search_growth": 1.8,
-    "line_search_max_expand": 22,
-    "line_search_samples": 17,
+    "line_search_min_lambda": -0.5,
+    "line_search_max_lambda": 0.5,
     "line_search_tolerance": 1e-5,
     "line_search_max_iterations": 120,
     "direction_zero_tolerance": 1e-12,
@@ -129,10 +127,8 @@ def run_batch(
         config = SolverConfig(
             epsilon=epsilon,
             max_iterations=int(config_payload["max_iterations"]),
-            line_search_initial_step=float(config_payload["line_search_initial_step"]),
-            line_search_growth=float(config_payload["line_search_growth"]),
-            line_search_max_expand=int(config_payload["line_search_max_expand"]),
-            line_search_samples=int(config_payload["line_search_samples"]),
+            line_search_min_lambda=float(config_payload["line_search_min_lambda"]),
+            line_search_max_lambda=float(config_payload["line_search_max_lambda"]),
             line_search_tolerance=float(config_payload["line_search_tolerance"]),
             line_search_max_iterations=int(config_payload["line_search_max_iterations"]),
             direction_zero_tolerance=float(config_payload["direction_zero_tolerance"]),

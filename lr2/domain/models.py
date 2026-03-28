@@ -30,10 +30,8 @@ class SolverConfig:
 
     epsilon: float
     max_iterations: int
-    line_search_initial_step: float
-    line_search_growth: float
-    line_search_max_expand: int
-    line_search_samples: int
+    line_search_min_lambda: float
+    line_search_max_lambda: float
     line_search_tolerance: float
     line_search_max_iterations: int
     direction_zero_tolerance: float

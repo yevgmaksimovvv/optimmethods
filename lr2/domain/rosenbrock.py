@@ -103,37 +103,6 @@ def _build_rotated_directions(
     )
 
 
-def _adaptive_interval(
-    phi: Callable[[float], float],
-    initial_step: float,
-    growth: float,
-    max_expand: int,
-    samples: int,
-    flat_tolerance: float,
-) -> tuple[float, float]:
-    """Подбирает устойчивый интервал вокруг минимума одномерной функции."""
-    if samples < 3 or samples % 2 == 0:
-        raise ValueError("line_search_samples должен быть нечетным и >= 3")
-
-    bound = max(abs(initial_step), 1e-6)
-    for _ in range(max_expand):
-        grid = [(-bound + (2.0 * bound * idx) / (samples - 1)) for idx in range(samples)]
-        values = [phi(point) for point in grid]
-        mid_index = samples // 2
-        center_value = values[mid_index]
-        spread = max(values) - min(values)
-        scale = max(1.0, abs(center_value))
-        if spread <= flat_tolerance * scale:
-            return 0.0, 0.0
-
-        min_index = min(range(samples), key=lambda idx: values[idx])
-        if 0 < min_index < samples - 1:
-            return grid[min_index - 1], grid[min_index + 1]
-        bound *= growth
-
-    return -bound, bound
-
-
 def _golden_section_minimize(
     phi: Callable[[float], float],
     left: float,
@@ -168,18 +137,24 @@ def _golden_section_minimize(
 
 
 def _line_search(phi: Callable[[float], float], config: SolverConfig) -> float:
-    left, right = _adaptive_interval(
-        phi,
-        initial_step=config.line_search_initial_step,
-        growth=config.line_search_growth,
-        max_expand=config.line_search_max_expand,
-        samples=config.line_search_samples,
-        flat_tolerance=config.line_search_tolerance,
-    )
+    # Для плоского профиля выбираем нулевой шаг, чтобы избежать случайного дрейфа
+    # на эквивалентных значениях функции.
+    if config.line_search_min_lambda <= 0.0 <= config.line_search_max_lambda:
+        probe_points = (
+            config.line_search_min_lambda,
+            0.0,
+            config.line_search_max_lambda,
+        )
+        probe_values = [phi(point) for point in probe_points]
+        spread = max(probe_values) - min(probe_values)
+        scale = max(1.0, abs(probe_values[1]))
+        if spread <= config.line_search_tolerance * scale:
+            return 0.0
+
     return _golden_section_minimize(
         phi,
-        left=left,
-        right=right,
+        left=config.line_search_min_lambda,
+        right=config.line_search_max_lambda,
         tolerance=config.line_search_tolerance,
         max_iterations=config.line_search_max_iterations,
     )
@@ -206,6 +181,12 @@ def rosenbrock_minimize(
         raise ValueError("epsilon должен быть > 0")
     if config.max_iterations <= 0:
         raise ValueError("max_iterations должен быть > 0")
+    if config.line_search_min_lambda >= config.line_search_max_lambda:
+        raise ValueError("line_search_min_lambda должен быть < line_search_max_lambda")
+    if config.line_search_tolerance <= 0.0:
+        raise ValueError("line_search_tolerance должен быть > 0")
+    if config.line_search_max_iterations <= 0:
+        raise ValueError("line_search_max_iterations должен быть > 0")
     if config.direction_zero_tolerance <= 0.0:
         raise ValueError("direction_zero_tolerance должен быть > 0")
     if config.stagnation_abs_tolerance < 0.0:
