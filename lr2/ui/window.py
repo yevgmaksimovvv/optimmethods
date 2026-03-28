@@ -48,6 +48,11 @@ from lr2.domain.polynomial import evaluate_polynomial, format_polynomial
 APP_TITLE = "ЛР2 — Метод Розенброка (непрерывный шаг)"
 COEFFICIENT_MAX_DEGREE = 4
 COEFFICIENT_MATRIX_SIZE = COEFFICIENT_MAX_DEGREE + 1
+EPSILON_INPUT_WIDTH = 96
+START_INPUT_WIDTH = 64
+CONTROL_BUTTON_SIZE = 44
+ROW_CONTROL_SPACING = 4
+START_SEPARATOR_WIDTH = 12
 MATPLOTLIB_DARK_RC = {
     "figure.facecolor": "#171b24",
     "axes.facecolor": "#10141f",
@@ -66,9 +71,9 @@ PRESET_CONFIGS = {
     "variant_f1": {
         "label": "F1",
         "tooltip": "F1 (вариант 2)",
-        "formula_text": "F1(x) = (3x1^2 - x2)^2 + (2x1 - 3x2)^2",
-        "formula_display": "F<sub>1</sub>(x) = (3x<sub>1</sub><sup>2</sup> - x<sub>2</sub>)<sup>2</sup><br>"
-        "+ (2x<sub>1</sub> - 3x<sub>2</sub>)<sup>2</sup>",
+        "formula_text": "F1(x) = 9x1^4 - 6x1^2*x2 + 10x2^2 + 4x1^2 - 12x1*x2",
+        "formula_display": "F<sub>1</sub>(x) = 9x<sub>1</sub><sup>4</sup> - 6x<sub>1</sub><sup>2</sup>x<sub>2</sub>"
+        " + 10x<sub>2</sub><sup>2</sup><br>+ 4x<sub>1</sub><sup>2</sup> - 12x<sub>1</sub>x<sub>2</sub>",
         "starts": "0;1",
     },
     "variant_f2": {
@@ -496,22 +501,26 @@ class RosenbrockWindow(QMainWindow):
         self.epsilon_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.epsilon_scroll.setMinimumHeight(72)
         self.epsilon_scroll.setMaximumHeight(76)
-        self.epsilon_scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.epsilon_scroll.setMinimumWidth(0)
+        self.epsilon_scroll.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
 
         self.epsilon_fields_container = QWidget()
         self.epsilon_fields_layout = QHBoxLayout(self.epsilon_fields_container)
         self.epsilon_fields_layout.setContentsMargins(0, 0, 0, 0)
         self.epsilon_fields_layout.setSpacing(8)
         self.epsilon_fields_layout.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self.epsilon_fields_layout.setSizeConstraint(QHBoxLayout.SetFixedSize)
         self.epsilon_scroll.setWidget(self.epsilon_fields_container)
 
         self.add_epsilon_button = QPushButton("+")
         self.add_epsilon_button.setProperty("role", "epsilon-add")
-        self.add_epsilon_button.setFixedSize(44, 44)
-        self.add_epsilon_button.clicked.connect(self._add_epsilon_input)
+        self.add_epsilon_button.setFixedSize(CONTROL_BUTTON_SIZE, CONTROL_BUTTON_SIZE)
+        self.add_epsilon_button.clicked.connect(lambda _checked=False: self._add_epsilon_input())
 
         epsilon_row_layout.addWidget(self.epsilon_scroll, 1, Qt.AlignTop)
         epsilon_row_layout.addWidget(self.add_epsilon_button, 0, Qt.AlignTop)
+        epsilon_row_layout.setStretch(0, 1)
+        epsilon_row_layout.setStretch(1, 0)
 
         self._add_epsilon_input("0.1")
 
@@ -530,22 +539,26 @@ class RosenbrockWindow(QMainWindow):
         self.start_points_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.start_points_scroll.setMinimumHeight(72)
         self.start_points_scroll.setMaximumHeight(76)
-        self.start_points_scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.start_points_scroll.setMinimumWidth(0)
+        self.start_points_scroll.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
 
         self.start_points_container = QWidget()
         self.start_points_layout = QHBoxLayout(self.start_points_container)
         self.start_points_layout.setContentsMargins(0, 0, 0, 0)
         self.start_points_layout.setSpacing(8)
         self.start_points_layout.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self.start_points_layout.setSizeConstraint(QHBoxLayout.SetFixedSize)
         self.start_points_scroll.setWidget(self.start_points_container)
 
         self.add_start_point_button = QPushButton("+")
         self.add_start_point_button.setProperty("role", "start-add")
-        self.add_start_point_button.setFixedSize(44, 44)
-        self.add_start_point_button.clicked.connect(self._add_start_point_input)
+        self.add_start_point_button.setFixedSize(CONTROL_BUTTON_SIZE, CONTROL_BUTTON_SIZE)
+        self.add_start_point_button.clicked.connect(lambda _checked=False: self._add_start_point_input())
 
         start_row_layout.addWidget(self.start_points_scroll, 1, Qt.AlignTop)
         start_row_layout.addWidget(self.add_start_point_button, 0, Qt.AlignTop)
+        start_row_layout.setStretch(0, 1)
+        start_row_layout.setStretch(1, 0)
 
         self._add_start_point_input("0", "1")
 
@@ -806,13 +819,13 @@ class RosenbrockWindow(QMainWindow):
         item = QWidget()
         item_layout = QHBoxLayout(item)
         item_layout.setContentsMargins(0, 0, 0, 0)
-        item_layout.setSpacing(4)
+        item_layout.setSpacing(ROW_CONTROL_SPACING)
 
-        epsilon_input = QLineEdit(value)
+        epsilon_input = QLineEdit(str(value))
         epsilon_input.setProperty("role", "epsilon-item")
         epsilon_input.setPlaceholderText("ε")
-        epsilon_input.setFixedWidth(96)
-        epsilon_input.setFixedHeight(44)
+        epsilon_input.setFixedWidth(EPSILON_INPUT_WIDTH)
+        epsilon_input.setFixedHeight(CONTROL_BUTTON_SIZE)
         epsilon_input.setAlignment(Qt.AlignCenter)
         remove_button = QPushButton("−")
         remove_button.setProperty("role", "epsilon-remove")
@@ -820,6 +833,9 @@ class RosenbrockWindow(QMainWindow):
 
         item_layout.addWidget(epsilon_input)
         item_layout.addWidget(remove_button)
+        item.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        item.setFixedWidth(EPSILON_INPUT_WIDTH + CONTROL_BUTTON_SIZE + ROW_CONTROL_SPACING)
+        item.setFixedHeight(CONTROL_BUTTON_SIZE)
         self.epsilon_fields_layout.addWidget(item)
         self.epsilon_items.append((item, epsilon_input, remove_button))
         self._update_epsilon_remove_buttons()
@@ -867,26 +883,26 @@ class RosenbrockWindow(QMainWindow):
         item = QWidget()
         item_layout = QHBoxLayout(item)
         item_layout.setContentsMargins(0, 0, 0, 0)
-        item_layout.setSpacing(4)
+        item_layout.setSpacing(ROW_CONTROL_SPACING)
 
-        x1_input = QLineEdit(x1_value)
+        x1_input = QLineEdit(str(x1_value))
         x1_input.setProperty("role", "start-item")
         x1_input.setPlaceholderText("x1")
-        x1_input.setFixedWidth(64)
-        x1_input.setFixedHeight(44)
+        x1_input.setFixedWidth(START_INPUT_WIDTH)
+        x1_input.setFixedHeight(CONTROL_BUTTON_SIZE)
         x1_input.setAlignment(Qt.AlignCenter)
 
-        x2_input = QLineEdit(x2_value)
+        x2_input = QLineEdit(str(x2_value))
         x2_input.setProperty("role", "start-item")
         x2_input.setPlaceholderText("x2")
-        x2_input.setFixedWidth(64)
-        x2_input.setFixedHeight(44)
+        x2_input.setFixedWidth(START_INPUT_WIDTH)
+        x2_input.setFixedHeight(CONTROL_BUTTON_SIZE)
         x2_input.setAlignment(Qt.AlignCenter)
 
         separator = QLabel("—")
         separator.setProperty("role", "start-separator")
         separator.setAlignment(Qt.AlignCenter)
-        separator.setFixedWidth(12)
+        separator.setFixedWidth(START_SEPARATOR_WIDTH)
 
         remove_button = QPushButton("−")
         remove_button.setProperty("role", "start-remove")
@@ -896,6 +912,15 @@ class RosenbrockWindow(QMainWindow):
         item_layout.addWidget(separator)
         item_layout.addWidget(x2_input)
         item_layout.addWidget(remove_button)
+        item.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        item.setFixedWidth(
+            START_INPUT_WIDTH
+            + START_SEPARATOR_WIDTH
+            + START_INPUT_WIDTH
+            + CONTROL_BUTTON_SIZE
+            + ROW_CONTROL_SPACING * 3
+        )
+        item.setFixedHeight(CONTROL_BUTTON_SIZE)
 
         self.start_points_layout.addWidget(item)
         self.start_point_items.append((item, x1_input, x2_input, remove_button))
