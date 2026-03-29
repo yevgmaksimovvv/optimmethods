@@ -11,7 +11,7 @@
 
 import logging
 import math
-from typing import Dict, Iterable, Tuple
+from typing import Dict, Tuple
 
 from lr1.domain.models import CoefficientSpec, FunctionSpec, FunctionTemplateSpec
 from lr1.domain.numerical import far_from_all, unique_sorted

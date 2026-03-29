@@ -1,4 +1,4 @@
-"""Проверка архитектурных границ для ЛР2."""
+"""Проверка архитектурных границ для ЛР1."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import ast
 from pathlib import Path
 
 DOMAIN_DIR = Path(__file__).resolve().parents[1] / "domain"
-FORBIDDEN_IMPORT_PREFIXES = ("PySide6", "matplotlib")
+FORBIDDEN_IMPORT_PREFIXES = ("PySide6", "matplotlib", "tkinter")
 
 
 def _extract_import_roots(module_path: Path) -> set[str]:

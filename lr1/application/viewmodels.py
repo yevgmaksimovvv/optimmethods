@@ -6,7 +6,7 @@ UI не должен сам решать, как форматировать чи
 """
 
 from dataclasses import dataclass
-from typing import List, Optional, Sequence, Tuple
+from typing import List, Optional, Tuple
 
 from lr1.application.analysis import build_grid_observations
 from lr1.domain.functions import analytic_comment
@@ -85,6 +85,8 @@ def build_summary_view_model(report: RunReport) -> SummaryViewModel:
     - в одиночном запуске показывается по одной строке на метод;
     - в серии расчётов показываются все успешные прогоны по сетке.
     """
+    result_rows: list[tuple[str, ...]] = []
+    result_headers: tuple[str, ...]
     if report.mode == "grid":
         result_headers = (
             "Метод",
@@ -98,7 +100,6 @@ def build_summary_view_model(report: RunReport) -> SummaryViewModel:
             "|Δx|",
             "|Δf|",
         )
-        result_rows = []
         for method_key in report.method_keys:
             for run in report.grid_runs_by_method.get(method_key, ()):
                 dx, df = result_error_pair(report, run.result.x_opt, run.result.f_opt)
@@ -127,7 +128,6 @@ def build_summary_view_model(report: RunReport) -> SummaryViewModel:
             "|Δx|",
             "|Δf|",
         )
-        result_rows = []
         for method_key in report.method_keys:
             result = report.results_by_method.get(method_key)
             if result is None:

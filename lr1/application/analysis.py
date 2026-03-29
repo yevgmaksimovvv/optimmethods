@@ -9,7 +9,7 @@
 """
 
 import logging
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 from lr1.domain.models import GridRunResult, InputConfig, ReferencePoint, SkippedRun
 from lr1.domain.numerical import is_better
@@ -55,10 +55,10 @@ def build_plot_range(function_spec, interval_raw: Tuple[float, float]) -> Tuple[
     return plot_range
 
 
-def is_valid_method_params(method_key: str, eps: float, l: float) -> bool:
+def is_valid_method_params(method_key: str, eps: float, interval_l: float) -> bool:
     """Проверяет, допустима ли пара параметров для конкретного метода."""
     if method_key == "dichotomy":
-        return eps < l
+        return eps < interval_l
     return True
 
 

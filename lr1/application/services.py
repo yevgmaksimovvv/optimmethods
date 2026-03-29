@@ -87,11 +87,11 @@ def build_input_config(
     a = _parse_float(a_raw, "a")
     b = _parse_float(b_raw, "b")
     eps = _parse_float(eps_raw, "ε")
-    l = _parse_float(l_raw, "l")
+    l_value = _parse_float(l_raw, "l")
 
     if a >= b:
         raise ValueError("Должно быть a < b.")
-    if eps <= 0 or l <= 0:
+    if eps <= 0 or l_value <= 0:
         raise ValueError("Параметры ε и l должны быть положительными.")
 
     template = FUNCTION_TEMPLATE_SPECS[function_key]
@@ -114,7 +114,7 @@ def build_input_config(
         interval_raw=(a, b),
         interval=interval,
         eps=eps,
-        l=l,
+        l=l_value,
     )
     logger.info("build_input_config success function=%s interval=%s", config.function_spec.key, config.interval)
     return config
@@ -219,19 +219,19 @@ def run_full_grid(config: InputConfig) -> RunReport:
     grid_runs_by_method: Dict[str, list[GridRunResult]] = {key: [] for key in method_keys}
 
     for eps in SERIES_EPS_VALUES:
-        for l in GRID_L_VALUES:
-            logger.debug("run_full_grid combination eps=%s l=%s", eps, l)
+        for l_value in GRID_L_VALUES:
+            logger.debug("run_full_grid combination eps=%s l=%s", eps, l_value)
             for method_key in method_keys:
-                if not is_valid_method_params(method_key, eps, l):
+                if not is_valid_method_params(method_key, eps, l_value):
                     reason = skip_reason(method_key)
                     logger.info(
                         "run_full_grid method=%s skipped eps=%s l=%s reason=%s",
                         method_key,
                         eps,
-                        l,
+                        l_value,
                         reason,
                     )
-                    skipped_runs.append(SkippedRun(method_key=method_key, eps=eps, l=l, reason=reason))
+                    skipped_runs.append(SkippedRun(method_key=method_key, eps=eps, l=l_value, reason=reason))
                     continue
                 try:
                     result = METHOD_SPECS[method_key].runner(
@@ -239,7 +239,7 @@ def run_full_grid(config: InputConfig) -> RunReport:
                         config.interval[0],
                         config.interval[1],
                         eps,
-                        l,
+                        l_value,
                         config.kind,
                     )
                 except (ValueError, ZeroDivisionError) as method_error:
@@ -247,18 +247,20 @@ def run_full_grid(config: InputConfig) -> RunReport:
                         "run_full_grid method=%s failed eps=%s l=%s error=%s",
                         method_key,
                         eps,
-                        l,
+                        l_value,
                         method_error,
                     )
                     continue
 
-                best_by_method[method_key].append((eps, l, result))
-                grid_runs_by_method[method_key].append(GridRunResult(method_key=method_key, eps=eps, l=l, result=result))
+                best_by_method[method_key].append((eps, l_value, result))
+                grid_runs_by_method[method_key].append(
+                    GridRunResult(method_key=method_key, eps=eps, l=l_value, result=result)
+                )
                 logger.debug(
                     "run_full_grid method=%s success eps=%s l=%s x_opt=%.10f f_opt=%.10f evals=%d",
                     method_key,
                     eps,
-                    l,
+                    l_value,
                     result.x_opt,
                     result.f_opt,
                     result.func_evals,

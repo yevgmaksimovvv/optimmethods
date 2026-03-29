@@ -80,7 +80,7 @@ def sanitize_interval(
 
 def unique_sorted(values: Iterable[float], tol: float = ROOT_TOLERANCE) -> Tuple[float, ...]:
     """Сортирует значения и убирает почти совпадающие элементы."""
-    result = []
+    result: list[float] = []
     for value in sorted(values):
         if not result or abs(result[-1] - value) > tol:
             result.append(value)

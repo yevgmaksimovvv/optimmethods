@@ -10,7 +10,7 @@
 и раскладывает его по виджетам.
 """
 
-from typing import Callable, Iterable, Optional, Sequence, Tuple
+from typing import Callable, Optional, Sequence
 
 from matplotlib.figure import Figure
 from PySide6.QtCore import Qt
@@ -37,7 +37,6 @@ from PySide6.QtWidgets import (
 )
 
 from lr1.application.viewmodels import (
-    SummaryViewModel,
     build_grid_run_tooltip,
     build_iteration_rows,
     build_plot_context,
@@ -559,7 +558,6 @@ class IterationsTab(QWidget):
             _fit_tree_height(self.iterations_tree)
             return
 
-        header = self.iterations_tree.header()
         header_item = self.iterations_tree.headerItem()
         header_item.setTextAlignment(0, Qt.AlignCenter)
         for index in range(1, self.iterations_tree.columnCount()):
