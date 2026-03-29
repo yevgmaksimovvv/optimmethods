@@ -13,27 +13,29 @@
 from typing import Callable, Optional, Sequence
 
 from matplotlib.figure import Figure
+from optim_core.ui.controls_builder import create_choice_chip_grid
+from optim_core.ui.table_widgets import configure_data_table
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
-    QGroupBox,
+    QButtonGroup,
     QGridLayout,
+    QGroupBox,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QListWidget,
     QListWidgetItem,
-    QRadioButton,
+    QPushButton,
     QScrollArea,
     QSizePolicy,
-    QStackedWidget,
     QTableWidget,
     QTableWidgetItem,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
-    QHeaderView,
 )
 
 from lr1.application.viewmodels import (
@@ -158,13 +160,9 @@ def _create_table_widget() -> QTableWidget:
     """Создаёт базовую таблицу с общей конфигурацией стиля для вкладки `Сводка`."""
     table = QTableWidget()
     table.setProperty("variant", "report")
-    table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-    table.setSelectionMode(QAbstractItemView.NoSelection)
-    table.setFocusPolicy(Qt.NoFocus)
-    table.setAlternatingRowColors(True)
+    configure_data_table(table, min_row_height=31, allow_selection=False, word_wrap=True)
     table.verticalHeader().setVisible(False)
     table.horizontalHeader().setHighlightSections(False)
-    table.setWordWrap(True)
     return table
 
 
@@ -205,50 +203,6 @@ class SummaryTab(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
-
-        self.summary_stack = QStackedWidget()
-        layout.addWidget(self.summary_stack)
-
-        empty_page = QWidget()
-        empty_layout = QVBoxLayout(empty_page)
-        empty_layout.setContentsMargins(16, 24, 16, 0)
-        empty_layout.setSpacing(0)
-
-        empty_card = QWidget()
-        empty_card.setObjectName("SummaryEmptyCard")
-        empty_card.setMaximumWidth(700)
-        empty_card.setSizePolicy(QSizePolicy.MinimumExpanding, QSizePolicy.Maximum)
-        empty_card_layout = QVBoxLayout(empty_card)
-        empty_card_layout.setContentsMargins(30, 24, 30, 24)
-        empty_card_layout.setSpacing(18)
-
-        empty_title = QLabel("Пока нет результатов")
-        empty_title.setObjectName("SummaryEmptyTitle")
-        empty_title.setAlignment(Qt.AlignCenter)
-        empty_card_layout.addWidget(empty_title)
-
-        empty_text = QLabel(
-            "Слева выбери функцию, диапазон и метод.\n"
-            "После запуска здесь появятся результаты и сравнение методов."
-        )
-        empty_text.setObjectName("SummaryEmptyText")
-        empty_text.setAlignment(Qt.AlignCenter)
-        empty_text.setWordWrap(True)
-        empty_card_layout.addWidget(empty_text)
-
-        self.summary_empty_label = QLabel("Рассчитать для текущих параметров или запусти серию расчётов.")
-        self.summary_empty_label.setObjectName("SectionHint")
-        self.summary_empty_label.setAlignment(Qt.AlignCenter)
-        self.summary_empty_label.setWordWrap(True)
-        empty_card_layout.addWidget(self.summary_empty_label)
-
-        empty_row = QHBoxLayout()
-        empty_row.addStretch(1)
-        empty_row.addWidget(empty_card, 1)
-        empty_row.addStretch(1)
-        empty_layout.addLayout(empty_row)
-        empty_layout.addStretch(1)
-        self.summary_stack.addWidget(empty_page)
 
         summary_scroll = QScrollArea()
         summary_scroll.setWidgetResizable(True)
@@ -294,12 +248,11 @@ class SummaryTab(QWidget):
         summary_layout.addStretch(1)
 
         summary_scroll.setWidget(summary_content)
-        self.summary_stack.addWidget(summary_scroll)
+        layout.addWidget(summary_scroll)
 
     def populate(self, report: Optional[RunReport]) -> None:
         """Заполняет вкладку данными отчёта или возвращает её в пустое состояние."""
         if report is None:
-            self.summary_stack.setCurrentIndex(0)
             self.summary_results_box.hide()
             _set_table_data(self.summary_results_table, ("Результат",), ())
             _set_table_data(self.summary_reference_table, ("Параметр", "Значение"), ())
@@ -312,7 +265,6 @@ class SummaryTab(QWidget):
             return
 
         view_model = build_summary_view_model(report)
-        self.summary_stack.setCurrentIndex(1)
         self.summary_results_box.show()
         _set_table_data(self.summary_results_table, view_model.results_table.headers, view_model.results_table.rows)
         _set_table_data(self.summary_reference_table, view_model.reference_table.headers, view_model.reference_table.rows)
@@ -336,7 +288,9 @@ class IterationsTab(QWidget):
         super().__init__()
         self.on_grid_run_change = on_grid_run_change
         self.on_method_change = on_method_change
-        self.table_method_buttons = []
+        self.table_method_buttons: list[QPushButton] = []
+        self.table_method_group = QButtonGroup(self)
+        self.table_method_group.setExclusive(True)
 
         layout = QVBoxLayout(self)
         self.table_method_box = QGroupBox("Итерации выбранного метода")
@@ -508,14 +462,26 @@ class IterationsTab(QWidget):
         if report is None:
             return
 
-        for method_key in report.method_keys:
-            button = QRadioButton(METHOD_SPECS[method_key].title)
-            button.setProperty("choice_value", method_key)
+        options = [(METHOD_SPECS[method_key].title, method_key) for method_key in report.method_keys]
+        holder, buttons = create_choice_chip_grid(
+            group=self.table_method_group,
+            options=options,
+            columns=max(len(options), 1),
+            horizontal_spacing=10,
+            vertical_spacing=10,
+        )
+        self.table_method_buttons = buttons
+        for button in self.table_method_buttons:
             button.toggled.connect(self.on_method_change)
-            self.table_method_buttons_layout.addWidget(button)
-            self.table_method_buttons.append(button)
-            if method_key == selected_method_key:
+        self.table_method_buttons_layout.addWidget(holder)
+        selected_found = False
+        for button in self.table_method_buttons:
+            if str(button.property("choice_value")) == selected_method_key:
                 button.setChecked(True)
+                selected_found = True
+                break
+        if not selected_found and self.table_method_buttons:
+            self.table_method_buttons[0].setChecked(True)
         self.table_method_buttons_layout.addStretch(1)
 
     def populate_grid_runs(self, report: Optional[RunReport], selected_method_key: str, selected_index: int) -> None:

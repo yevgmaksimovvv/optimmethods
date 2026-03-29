@@ -12,8 +12,11 @@ import logging
 from typing import Iterable, Optional, Sequence, Tuple
 
 from lr1.infrastructure.logging import configure_logging
-from lr1.infrastructure.settings import INTERVAL_SHIFT_BASE, MIN_INTERVAL_SHIFT, ROOT_TOLERANCE
-
+from lr1.infrastructure.settings import (
+    INTERVAL_SHIFT_BASE,
+    MIN_INTERVAL_SHIFT,
+    ROOT_TOLERANCE,
+)
 
 configure_logging()
 logger = logging.getLogger("lr1.numerical")

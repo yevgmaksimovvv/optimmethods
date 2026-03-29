@@ -18,7 +18,6 @@ from lr1.domain.numerical import far_from_all, unique_sorted
 from lr1.infrastructure.logging import configure_logging
 from lr1.infrastructure.settings import DENOMINATOR_TOLERANCE, POLYNOMIAL_TOLERANCE
 
-
 configure_logging()
 logger = logging.getLogger("lr1.function_defs")
 

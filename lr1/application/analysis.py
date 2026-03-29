@@ -15,8 +15,6 @@ from lr1.domain.models import GridRunResult, InputConfig, ReferencePoint, Skippe
 from lr1.domain.numerical import is_better
 from lr1.domain.search import METHOD_ORDER, METHOD_SPECS
 from lr1.infrastructure.logging import configure_logging
-from lr1.infrastructure.settings import GRID_L_VALUES, SERIES_EPS_VALUES
-
 
 configure_logging()
 logger = logging.getLogger("lr1.analysis")
@@ -175,7 +173,8 @@ def build_grid_observations(
                 continue
 
             avg_by_l: Dict[float, float] = {}
-            for l_value in GRID_L_VALUES:
+            l_values = tuple(sorted({item.l for item in method_runs}))
+            for l_value in l_values:
                 evals = [item.result.func_evals for item in method_runs if item.l == l_value]
                 if evals:
                     avg_by_l[l_value] = sum(evals) / len(evals)
@@ -186,7 +185,8 @@ def build_grid_observations(
                 )
 
             avg_by_eps: Dict[float, float] = {}
-            for eps_value in SERIES_EPS_VALUES:
+            eps_values = tuple(sorted({item.eps for item in method_runs}))
+            for eps_value in eps_values:
                 evals = [item.result.func_evals for item in method_runs if item.eps == eps_value]
                 if evals:
                     avg_by_eps[eps_value] = sum(evals) / len(evals)

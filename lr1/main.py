@@ -7,7 +7,8 @@
 """
 
 import logging
-import sys
+
+from optim_core.entrypoint import GuiEntryPointSpec, run_gui_entry
 
 from lr1.infrastructure.logging import configure_logging, get_log_file_path
 
@@ -17,19 +18,13 @@ def main() -> None:
     configure_logging()
     logger = logging.getLogger("lr1.entry")
     logger.info("Entry point main start log_file=%s", get_log_file_path())
-    try:
-        from lr1.ui.window import main as gui_main
-    except ModuleNotFoundError as exc:
-        logger.exception("GUI dependency import failed: %s", exc)
-        dependency = exc.name or "unknown"
-        raise SystemExit(
-            "Не хватает зависимости для GUI: "
-            f"{dependency}\n"
-            "Установи зависимости командой:\n"
-            f"{sys.executable} -m pip install -r optimmethods/requirements.txt"
-        ) from exc
-
-    gui_main()
+    run_gui_entry(
+        GuiEntryPointSpec(
+            gui_import_path="lr1.ui.window:main",
+            requirements_hint_path="optimmethods/requirements.txt",
+            logger_name="lr1.entry",
+        )
+    )
 
 
 if __name__ == "__main__":

@@ -15,7 +15,6 @@ import threading
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
-
 LOG_DIR = Path(__file__).resolve().parent / "logs"
 LOG_FILE = LOG_DIR / "lr1_debug.log"
 _CONFIGURED = False

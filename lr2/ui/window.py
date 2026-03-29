@@ -7,32 +7,50 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-import matplotlib as mpl
 import numpy as np
-from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
-from PySide6.QtCore import QRect, QRectF, Qt
-from PySide6.QtGui import QPainter, QTextDocument
+from optim_core.parsing import parse_localized_float
+from optim_core.ui import (
+    BatchRunUiController,
+    BatchRunUiHooks,
+    ControlsPanel,
+    DarkQtThemeTokens,
+    DynamicSeriesInputRow,
+    MathHeaderView,
+    PlotCanvas,
+    TaskController,
+    add_parameter_row,
+    build_choice_chip_styles,
+    build_dark_qt_base_styles,
+    build_dynamic_series_styles,
+    clear_plot_canvas,
+    configure_data_table,
+    configure_two_panel_splitter,
+    create_choice_chip_grid,
+    create_controls_panel,
+    create_parameter_grid,
+    create_primary_action_button,
+    create_results_workspace,
+    create_scroll_container,
+    create_standard_group,
+    dark_plot_context,
+    set_table_data_layout,
+    set_table_empty_layout,
+)
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QApplication,
     QButtonGroup,
-    QComboBox,
     QGroupBox,
     QHBoxLayout,
     QHeaderView,
     QLabel,
-    QLineEdit,
     QMainWindow,
     QMessageBox,
-    QPushButton,
-    QScrollArea,
     QSizePolicy,
     QSplitter,
-    QStyle,
-    QStyleOptionHeader,
     QTableWidget,
     QTableWidgetItem,
-    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -41,7 +59,6 @@ from lr2.application.services import (
     VARIANT_PRESETS,
     build_polynomial,
     parse_epsilons,
-    parse_float,
     parse_points,
     run_batch,
 )
@@ -55,22 +72,7 @@ EPSILON_INPUT_WIDTH = 96
 START_INPUT_WIDTH = 64
 CONTROL_BUTTON_SIZE = 44
 ROW_CONTROL_SPACING = 4
-START_SEPARATOR_WIDTH = 12
 ARTIFACTS_BASE_DIR = Path("report") / "lr2_runs"
-MATPLOTLIB_DARK_RC = {
-    "figure.facecolor": "#171b24",
-    "axes.facecolor": "#10141f",
-    "axes.edgecolor": "#4a5974",
-    "axes.labelcolor": "#dce6f5",
-    "axes.titlecolor": "#e8f0ff",
-    "xtick.color": "#c4cfdf",
-    "ytick.color": "#c4cfdf",
-    "grid.color": "#2c3b55",
-    "grid.alpha": 0.35,
-    "text.color": "#dce6f5",
-    "legend.facecolor": "#161d2b",
-    "legend.edgecolor": "#4a5974",
-}
 PRESET_CONFIGS = {
     "variant_f1": {
         "label": "F1",
@@ -99,62 +101,6 @@ PRESET_CONFIGS = {
 }
 
 
-class MplCanvas(FigureCanvasQTAgg):
-    """Встраиваемый matplotlib canvas."""
-
-    def __init__(self, parent: QWidget | None = None):
-        self.figure = Figure(figsize=(13.0, 8.0), dpi=100)
-        self.figure.set_constrained_layout(True)
-        super().__init__(self.figure)
-        self.setParent(parent)
-        self.figure.patch.set_facecolor("#171b24")
-
-
-class MathHeaderView(QHeaderView):
-    """Header, который рендерит подписи через HTML для математики."""
-
-    def __init__(self, orientation: Qt.Orientation, parent: QWidget | None = None):
-        super().__init__(orientation, parent)
-        self._labels: list[str] = []
-
-    def set_math_labels(self, labels: list[str]) -> None:
-        self._labels = labels
-        self.viewport().update()
-
-    def paintSection(self, painter: QPainter, rect: QRect, logical_index: int) -> None:
-        if logical_index < 0:
-            return
-
-        option = QStyleOptionHeader()
-        self.initStyleOption(option)
-        option.rect = rect
-        option.section = logical_index
-        option.text = ""
-        option.position = QStyleOptionHeader.SectionPosition.Middle
-        option.textAlignment = Qt.AlignCenter
-        self.style().drawControl(QStyle.ControlElement.CE_Header, option, painter, self)
-
-        if logical_index >= len(self._labels):
-            return
-        text = self._labels[logical_index]
-        if not text:
-            return
-
-        text_rect = rect.adjusted(6, 2, -6, -2)
-        doc = QTextDocument(self)
-        doc.setHtml(
-            "<div style='text-align:center; color:#dde8fa; font-weight:700; font-size:12px;'>"
-            f"{text}</div>"
-        )
-        doc.setTextWidth(text_rect.width())
-        content_height = doc.size().height()
-        top_shift = max((text_rect.height() - content_height) / 2.0, 0.0)
-        painter.save()
-        painter.translate(text_rect.left(), text_rect.top() + top_shift)
-        doc.drawContents(painter, QRectF(0, 0, text_rect.width(), text_rect.height()))
-        painter.restore()
-
-
 class RosenbrockWindow(QMainWindow):
     """Главное окно приложения ЛР2."""
 
@@ -167,6 +113,21 @@ class RosenbrockWindow(QMainWindow):
         self._batch_result: BatchResult | None = None
         self._selected_run_index: int | None = None
         self._active_preset_key = "variant_f1"
+        self._plot_mode: str = "contour"
+        self._epsilon_row: DynamicSeriesInputRow | None = None
+        self._start_row: DynamicSeriesInputRow | None = None
+        self._run_task = TaskController(self)
+        self._run_task.succeeded.connect(self._on_run_succeeded)
+        self._run_task.failed.connect(self._on_run_failed)
+        self._run_flow = BatchRunUiController[BatchResult](
+            BatchRunUiHooks(
+                assign_report=self._assign_batch_result,
+                reset_selection=self._reset_batch_selection,
+                render_overview=self._render_batch_overview,
+                select_first=self._select_first_run_after_apply,
+                clear_details=self._clear_batch_details,
+            )
+        )
 
         root = QWidget()
         root_layout = QVBoxLayout(root)
@@ -174,53 +135,60 @@ class RosenbrockWindow(QMainWindow):
         root_layout.setSpacing(12)
 
         splitter = QSplitter(Qt.Horizontal)
-        splitter.setChildrenCollapsible(False)
         root_layout.addWidget(splitter)
         self.setCentralWidget(root)
 
-        controls = self._build_controls_panel()
-        controls_scroll = QScrollArea()
-        controls_scroll.setWidgetResizable(True)
-        controls_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        controls_scroll.setFrameShape(QScrollArea.NoFrame)
-        controls_scroll.setWidget(controls)
+        self._controls_panel = self._build_controls_panel()
+        controls_scroll = create_scroll_container(
+            self._controls_panel,
+            widget_resizable=True,
+            horizontal_policy=Qt.ScrollBarAlwaysOff,
+        )
 
         results = self._build_results_panel()
 
-        splitter.addWidget(controls_scroll)
-        splitter.addWidget(results)
-        splitter.setStretchFactor(0, 0)
-        splitter.setStretchFactor(1, 1)
-        splitter.setSizes([510, 1020])
-        splitter.setHandleWidth(8)
+        configure_two_panel_splitter(
+            splitter,
+            left=controls_scroll,
+            right=results,
+            left_size=510,
+            right_size=1020,
+            handle_width=8,
+        )
 
         self.preset_buttons["variant_f1"].setChecked(True)
-        self._apply_preset("variant_f1")
+        self._on_preset_selected("variant_f1", True)
         self._clear_plot()
 
     def _apply_styles(self) -> None:
         self.setStyleSheet(
-            """
-            QMainWindow, QWidget {
-                background: #1b1f2a;
-                color: #f0f2f5;
-                font-family: "Segoe UI", "Helvetica Neue", "Arial", sans-serif;
-                font-size: 15px;
-            }
-            QGroupBox {
-                border: 1px solid #3f4a62;
-                border-radius: 12px;
-                margin-top: 12px;
-                padding: 13px;
-                font-weight: 600;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                left: 10px;
-                padding: 0 6px;
-                color: #dde5f3;
-            }
-            QLabel { background: transparent; }
+            build_dark_qt_base_styles(
+                DarkQtThemeTokens(
+                    background="#1b1f2a",
+                    text="#f0f2f5",
+                    font_family='"Segoe UI", "Helvetica Neue", "Arial", sans-serif',
+                    group_border="#3f4a62",
+                    group_radius_px=12,
+                    group_padding_px=13,
+                    group_title_color="#dde5f3",
+                    button_bg="#2b3447",
+                    button_border="#4b5873",
+                    button_hover_bg="#36415a",
+                    button_pressed_bg="#242d3d",
+                    button_disabled_bg="#1f2533",
+                    button_disabled_text="#66738d",
+                    button_disabled_border="#3c465f",
+                    primary_bg="#0f7aff",
+                    primary_border="#3b94ff",
+                    primary_hover_bg="#2588ff",
+                    primary_pressed_bg="#0d66d8",
+                    tab_bg="#2c303b",
+                    tab_border="#4b4f5c",
+                    tab_selected_bg="#46516b",
+                    tab_selected_border="#647596",
+                )
+            )
+            + """
             QLineEdit {
                 background: #131824;
                 border: 1px solid #3f4a62;
@@ -231,125 +199,14 @@ class RosenbrockWindow(QMainWindow):
                 min-height: 24px;
             }
             QLineEdit:focus { border: 1px solid #2f8fff; }
-            QPushButton {
-                background: #2b3447;
-                border: 1px solid #4b5873;
-                border-radius: 8px;
-                padding: 9px 14px;
-                color: #f5f7fb;
-                font-weight: 600;
-                min-height: 22px;
-            }
-            QPushButton:hover { background: #36415a; }
-            QPushButton:pressed { background: #242d3d; }
-            QPushButton[variant="primary"] {
-                background: #0f7aff;
-                border-color: #3b94ff;
-            }
-            QPushButton[variant="primary"]:hover { background: #2588ff; }
-            QPushButton[variant="primary"]:pressed { background: #0d66d8; }
-            QPushButton[role="preset"] {
-                min-height: 32px;
-                min-width: 0px;
-                padding: 8px 10px;
-                border-radius: 9px;
-                background: #253149;
-                border: 1px solid #46567a;
-                font-size: 14px;
-                font-weight: 700;
-            }
-            QPushButton[role="preset"][checked="true"] {
-                background: #0f7aff;
-                border-color: #3b94ff;
-            }
-            QPushButton[role="epsilon-add"] {
-                min-height: 44px;
-                max-height: 44px;
-                min-width: 44px;
-                max-width: 44px;
-                border-radius: 8px;
-                font-size: 22px;
-                font-weight: 700;
-                padding: 0 0 2px 0;
-                background: #0f7aff;
-                border-color: #3b94ff;
-            }
-            QPushButton[role="epsilon-add"]:hover { background: #2588ff; }
-            QPushButton[role="epsilon-add"]:pressed { background: #0d66d8; }
-            QPushButton[role="start-add"] {
-                min-height: 44px;
-                max-height: 44px;
-                min-width: 44px;
-                max-width: 44px;
-                border-radius: 8px;
-                font-size: 22px;
-                font-weight: 700;
-                padding: 0 0 2px 0;
-                background: #0f7aff;
-                border-color: #3b94ff;
-            }
-            QPushButton[role="start-add"]:hover { background: #2588ff; }
-            QPushButton[role="start-add"]:pressed { background: #0d66d8; }
-            QPushButton[role="epsilon-remove"] {
-                min-height: 44px;
-                max-height: 44px;
-                min-width: 44px;
-                max-width: 44px;
-                border-radius: 7px;
-                font-size: 18px;
-                font-weight: 700;
-                padding: 0 0 2px 0;
-                background: #2b3447;
-                border-color: #4b5873;
-            }
-            QPushButton[role="epsilon-remove"]:hover { background: #36415a; }
-            QPushButton[role="epsilon-remove"]:pressed { background: #242d3d; }
-            QPushButton[role="epsilon-remove"]:disabled {
-                background: #1f2533;
-                color: #66738d;
-                border-color: #3c465f;
-            }
-            QPushButton[role="start-remove"] {
-                min-height: 44px;
-                max-height: 44px;
-                min-width: 44px;
-                max-width: 44px;
-                border-radius: 7px;
-                font-size: 18px;
-                font-weight: 700;
-                padding: 0 0 2px 0;
-                background: #2b3447;
-                border-color: #4b5873;
-            }
-            QPushButton[role="start-remove"]:hover { background: #36415a; }
-            QPushButton[role="start-remove"]:pressed { background: #242d3d; }
-            QPushButton[role="start-remove"]:disabled {
-                background: #1f2533;
-                color: #66738d;
-                border-color: #3c465f;
-            }
-            QLineEdit[role="epsilon-item"] {
-                font-weight: 700;
-                text-align: center;
-                min-height: 44px;
-                padding-top: 0px;
-                padding-bottom: 0px;
-            }
-            QLineEdit[role="start-item"] {
-                font-weight: 700;
-                text-align: center;
-                min-height: 44px;
-                padding-top: 0px;
-                padding-bottom: 0px;
-            }
-            QLabel[role="start-separator"] {
-                color: #a9b8d4;
-                font-size: 18px;
-                font-weight: 700;
-            }
             QLabel[role="hint"] {
                 color: #a8b1c3;
                 font-size: 12px;
+            }
+            QLabel[role="parameter-label"] {
+                color: #dce6f5;
+                font-size: 15px;
+                font-weight: 600;
             }
             QLabel[role="formula-preview"] {
                 background: #101827;
@@ -361,99 +218,86 @@ class RosenbrockWindow(QMainWindow):
                 font-weight: 700;
             }
             QTableWidget {
-                background: #111723;
-                border: 1px solid #3f4a62;
+                background: #12161d;
+                border: 1px solid #464b59;
                 border-radius: 8px;
                 color: #f5f7fb;
-                gridline-color: #273247;
-                selection-background-color: #1a5fcc;
-                alternate-background-color: #151d2a;
+                gridline-color: #2d3241;
+                selection-background-color: #2a6df4;
+                alternate-background-color: #151b25;
+                font-family: "SF Mono", "Menlo", "Consolas", monospace;
                 font-size: 14px;
             }
             QHeaderView::section {
-                background: #1d2a3f;
-                color: #dde8fa;
+                background: #222938;
+                color: #dbe2ee;
                 border: 0;
-                border-right: 1px solid #304665;
-                border-bottom: 1px solid #304665;
-                padding: 7px 8px;
+                border-right: 1px solid #33415b;
+                border-bottom: 1px solid #33415b;
+                padding: 6px 8px;
                 font-weight: 700;
                 font-size: 12px;
+                font-family: "Segoe UI", "Helvetica Neue", "Arial", sans-serif;
             }
             QTableCornerButton::section {
-                background: #1d2a3f;
+                background: #222938;
                 border: 0;
-                border-right: 1px solid #304665;
-                border-bottom: 1px solid #304665;
+                border-right: 1px solid #33415b;
+                border-bottom: 1px solid #33415b;
+            }
+            QLabel#SectionCaption {
+                color: #9aa5bb;
+                font-size: 12px;
+                font-weight: 700;
+                letter-spacing: 0.04em;
+                text-transform: uppercase;
             }
             QSplitter::handle {
                 background: #2a3549;
                 border-radius: 3px;
             }
-            QTabWidget::pane {
-                border: 0;
-                top: 0;
+            QLabel#SummaryEmptyTitle {
+                color: #eef2f8;
+                font-size: 22px;
+                font-weight: 700;
             }
-            QTabWidget::tab-bar {
-                alignment: left;
+            QLabel#SummaryEmptyText {
+                color: #b8c1d1;
+                font-size: 15px;
             }
-            QTabBar {
-                qproperty-drawBase: 0;
-                qproperty-expanding: 1;
-            }
-            QTabBar::tab {
-                background: #2c303b;
-                border: 1px solid #4b4f5c;
-                padding: 8px 16px 10px 16px;
-                margin-right: 6px;
-                margin-bottom: 2px;
-                border-top-left-radius: 10px;
-                border-top-right-radius: 10px;
-                min-width: 0px;
-                min-height: 24px;
-                font-size: 14px;
-                font-weight: 600;
-            }
-            QTabBar::tab:selected {
-                background: #46516b;
-                border-color: #647596;
-                color: #ffffff;
+            QWidget#SummaryEmptyCard {
+                background: #181b24;
+                border: 1px solid #31384a;
+                border-radius: 14px;
             }
             """
+            + build_choice_chip_styles()
+            + build_dynamic_series_styles(separator_role="start-separator")
         )
 
     def _build_controls_panel(self) -> QWidget:
-        panel = QWidget()
-        panel.setMinimumWidth(500)
-        panel.setMaximumWidth(560)
-        layout = QVBoxLayout(panel)
-        layout.setSpacing(12)
-        layout.setContentsMargins(0, 0, 0, 0)
+        controls: ControlsPanel = create_controls_panel(min_width=500, max_width=560, spacing=12)
+        panel = controls.panel
+        layout = controls.layout
 
-        source_group = QGroupBox("Функция")
-        source_group.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
-        source_layout = QVBoxLayout(source_group)
-        source_layout.setContentsMargins(16, 16, 16, 14)
-        source_layout.setSpacing(8)
+        source_group, source_layout = create_standard_group("Функция")
 
-        preset_row = QWidget()
-        preset_layout = QHBoxLayout(preset_row)
-        preset_layout.setContentsMargins(0, 0, 0, 0)
-        preset_layout.setSpacing(6)
         self.preset_group = QButtonGroup(self)
         self.preset_group.setExclusive(True)
-        self.preset_buttons: dict[str, QPushButton] = {}
-        for preset_key in ("variant_f1", "variant_f2", "custom"):
-            button = QPushButton(PRESET_CONFIGS[preset_key]["label"])
-            button.setCheckable(True)
-            button.setProperty("role", "preset")
-            button.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-            button.setToolTip(PRESET_CONFIGS[preset_key]["tooltip"])
-            button.clicked.connect(lambda checked, key=preset_key: self._on_preset_selected(key, checked))
-            self.preset_group.addButton(button)
-            self.preset_buttons[preset_key] = button
-            preset_layout.addWidget(button)
-        source_layout.addWidget(QLabel("Вариант"))
+        preset_keys = ("variant_f1", "variant_f2", "custom")
+        preset_row, preset_buttons = create_choice_chip_grid(
+            group=self.preset_group,
+            options=tuple((PRESET_CONFIGS[key]["label"], key) for key in preset_keys),
+            columns=len(preset_keys),
+            horizontal_spacing=6,
+            vertical_spacing=6,
+            on_clicked=self._on_preset_selected,
+            tooltips={key: PRESET_CONFIGS[key]["tooltip"] for key in preset_keys},
+        )
+        self.preset_buttons = {key: button for key, button in zip(preset_keys, preset_buttons, strict=True)}
+        variant_label = QLabel("Вариант")
+        variant_label.setObjectName("SectionCaption")
+        source_layout.addWidget(variant_label)
         source_layout.addWidget(preset_row)
 
         self.formula_preview = QLabel()
@@ -462,7 +306,9 @@ class RosenbrockWindow(QMainWindow):
         self.formula_preview.setWordWrap(True)
         self.formula_preview.setAlignment(Qt.AlignCenter)
         self.formula_preview.setTextFormat(Qt.RichText)
-        source_layout.addWidget(QLabel("Формула"))
+        formula_label = QLabel("Формула")
+        formula_label.setObjectName("SectionCaption")
+        source_layout.addWidget(formula_label)
         source_layout.addWidget(self.formula_preview)
 
         self.coefficients_table = QTableWidget(COEFFICIENT_MATRIX_SIZE, COEFFICIENT_MATRIX_SIZE)
@@ -477,108 +323,46 @@ class RosenbrockWindow(QMainWindow):
         self.coefficients_table.verticalHeader().setMinimumSectionSize(34)
         self.coefficients_table.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.coefficients_table.setMinimumHeight(220)
-        self._configure_table(self.coefficients_table, min_row_height=30)
+        configure_data_table(self.coefficients_table, min_row_height=30, allow_selection=False, word_wrap=False)
         self._reset_coefficient_table()
         coeff_label = QLabel("Коэффициенты c<sub>ij</sub>")
         coeff_label.setTextFormat(Qt.RichText)
+        coeff_label.setObjectName("SectionCaption")
         source_layout.addWidget(coeff_label)
         source_layout.addWidget(self.coefficients_table)
 
         info_group = QGroupBox("Параметры расчетов")
         info_group.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
-        info_layout = QVBoxLayout(info_group)
-        info_layout.setContentsMargins(16, 16, 16, 14)
-        info_layout.setSpacing(8)
+        info_grid = create_parameter_grid(info_group)
 
-        self.epsilon_items: list[tuple[QWidget, QLineEdit, QPushButton]] = []
-        epsilon_row = QWidget()
-        epsilon_row.setMinimumHeight(76)
-        epsilon_row_layout = QHBoxLayout(epsilon_row)
-        epsilon_row_layout.setContentsMargins(0, 0, 0, 0)
-        epsilon_row_layout.setSpacing(8)
-        epsilon_row_layout.setAlignment(Qt.AlignVCenter)
+        self._epsilon_row = DynamicSeriesInputRow(
+            add_role="series-add",
+            remove_role="series-remove",
+            field_role="series-item",
+            placeholders=("ε",),
+            field_widths=(EPSILON_INPUT_WIDTH,),
+            control_button_size=CONTROL_BUTTON_SIZE,
+            row_control_spacing=ROW_CONTROL_SPACING,
+        )
+        self._epsilon_row.add_item("0.1")
 
-        self.epsilon_scroll = QScrollArea()
-        self.epsilon_scroll.setWidgetResizable(False)
-        self.epsilon_scroll.setFrameShape(QScrollArea.NoFrame)
-        self.epsilon_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        self.epsilon_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.epsilon_scroll.setMinimumHeight(72)
-        self.epsilon_scroll.setMaximumHeight(76)
-        self.epsilon_scroll.setMinimumWidth(0)
-        self.epsilon_scroll.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+        self._start_row = DynamicSeriesInputRow(
+            add_role="series-add",
+            remove_role="series-remove",
+            field_role="series-item",
+            placeholders=("x1", "x2"),
+            field_widths=(START_INPUT_WIDTH, START_INPUT_WIDTH),
+            control_button_size=CONTROL_BUTTON_SIZE,
+            row_control_spacing=ROW_CONTROL_SPACING,
+            separator_text="—",
+            separator_role="start-separator",
+        )
+        self._start_row.add_item("0", "1")
 
-        self.epsilon_fields_container = QWidget()
-        self.epsilon_fields_layout = QHBoxLayout(self.epsilon_fields_container)
-        self.epsilon_fields_layout.setContentsMargins(0, 0, 0, 0)
-        self.epsilon_fields_layout.setSpacing(8)
-        self.epsilon_fields_layout.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-        self.epsilon_fields_layout.setSizeConstraint(QHBoxLayout.SetFixedSize)
-        self.epsilon_scroll.setWidget(self.epsilon_fields_container)
+        add_parameter_row(info_grid, row=0, label="Точности ε", control=self._epsilon_row.row_widget)
+        add_parameter_row(info_grid, row=1, label="Стартовые точки", control=self._start_row.row_widget)
 
-        self.add_epsilon_button = QPushButton("+")
-        self.add_epsilon_button.setProperty("role", "epsilon-add")
-        self.add_epsilon_button.setFixedSize(CONTROL_BUTTON_SIZE, CONTROL_BUTTON_SIZE)
-        self.add_epsilon_button.clicked.connect(lambda _checked=False: self._add_epsilon_input())
-
-        epsilon_row_layout.addWidget(self.epsilon_scroll, 1, Qt.AlignTop)
-        epsilon_row_layout.addWidget(self.add_epsilon_button, 0, Qt.AlignTop)
-        epsilon_row_layout.setStretch(0, 1)
-        epsilon_row_layout.setStretch(1, 0)
-
-        self._add_epsilon_input("0.1")
-
-        self.start_point_items: list[tuple[QWidget, QLineEdit, QLineEdit, QPushButton]] = []
-        start_row = QWidget()
-        start_row.setMinimumHeight(76)
-        start_row_layout = QHBoxLayout(start_row)
-        start_row_layout.setContentsMargins(0, 0, 0, 0)
-        start_row_layout.setSpacing(8)
-        start_row_layout.setAlignment(Qt.AlignVCenter)
-
-        self.start_points_scroll = QScrollArea()
-        self.start_points_scroll.setWidgetResizable(False)
-        self.start_points_scroll.setFrameShape(QScrollArea.NoFrame)
-        self.start_points_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        self.start_points_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.start_points_scroll.setMinimumHeight(72)
-        self.start_points_scroll.setMaximumHeight(76)
-        self.start_points_scroll.setMinimumWidth(0)
-        self.start_points_scroll.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
-
-        self.start_points_container = QWidget()
-        self.start_points_layout = QHBoxLayout(self.start_points_container)
-        self.start_points_layout.setContentsMargins(0, 0, 0, 0)
-        self.start_points_layout.setSpacing(8)
-        self.start_points_layout.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-        self.start_points_layout.setSizeConstraint(QHBoxLayout.SetFixedSize)
-        self.start_points_scroll.setWidget(self.start_points_container)
-
-        self.add_start_point_button = QPushButton("+")
-        self.add_start_point_button.setProperty("role", "start-add")
-        self.add_start_point_button.setFixedSize(CONTROL_BUTTON_SIZE, CONTROL_BUTTON_SIZE)
-        self.add_start_point_button.clicked.connect(lambda _checked=False: self._add_start_point_input())
-
-        start_row_layout.addWidget(self.start_points_scroll, 1, Qt.AlignTop)
-        start_row_layout.addWidget(self.add_start_point_button, 0, Qt.AlignTop)
-        start_row_layout.setStretch(0, 1)
-        start_row_layout.setStretch(1, 0)
-
-        self._add_start_point_input("0", "1")
-
-        epsilon_label = QLabel("Точности ε")
-        epsilon_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-        info_layout.addWidget(epsilon_label)
-        info_layout.addWidget(epsilon_row)
-        starts_label = QLabel("Стартовые точки")
-        starts_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-        info_layout.addWidget(starts_label)
-        info_layout.addWidget(start_row)
-
-        run_button = QPushButton("Рассчитать")
-        run_button.setProperty("variant", "primary")
-        run_button.clicked.connect(self._run_clicked)
-        run_button.setMinimumHeight(42)
+        run_button = create_primary_action_button(text="Рассчитать", on_click=self._run_clicked)
 
         layout.addWidget(source_group)
         layout.addWidget(info_group)
@@ -587,19 +371,22 @@ class RosenbrockWindow(QMainWindow):
         return panel
 
     def _build_results_panel(self) -> QWidget:
-        panel = QWidget()
-        layout = QVBoxLayout(panel)
-        layout.setSpacing(12)
-        tabs = QTabWidget()
-        tabs.setDocumentMode(True)
-        tabs.tabBar().setExpanding(True)
-        tabs.tabBar().setUsesScrollButtons(False)
-        layout.addWidget(tabs)
-
-        table_tab = QWidget()
-        table_layout = QVBoxLayout(table_tab)
-        table_layout.setContentsMargins(0, 0, 0, 0)
-        table_layout.setSpacing(12)
+        workspace = create_results_workspace(
+            results_title="Таблицы",
+            plot_title="Графики",
+            with_tables_empty_state=True,
+            tables_empty_title="Пока нет результатов",
+            tables_empty_description=(
+                "Слева выбери функцию, матрицу коэффициентов и параметры расчёта.\n"
+                "После запуска здесь появятся итоги и таблица итераций."
+            ),
+            tables_empty_hint="Нажми «Рассчитать», чтобы получить таблицы и графики.",
+        )
+        panel = workspace.panel
+        table_content_layout = workspace.tables_layout
+        self.results_tab_stack = workspace.tables_empty_stack
+        if self.results_tab_stack is None:
+            raise RuntimeError("Ожидался EmptyStateStack для вкладки таблиц")
 
         summary_group = QGroupBox("Итоги запусков")
         summary_layout = QVBoxLayout(summary_group)
@@ -616,9 +403,9 @@ class RosenbrockWindow(QMainWindow):
         self.summary_table.setMinimumHeight(140)
         self.summary_table.verticalHeader().setVisible(False)
         self.summary_table.itemSelectionChanged.connect(self._on_summary_selection_changed)
-        self._configure_table(self.summary_table, min_row_height=31)
+        configure_data_table(self.summary_table, min_row_height=31, allow_selection=True, word_wrap=False)
         summary_layout.addWidget(self.summary_table)
-        table_layout.addWidget(summary_group)
+        table_content_layout.addWidget(summary_group)
 
         steps_group = QGroupBox("Итерации")
         steps_layout = QVBoxLayout(steps_group)
@@ -648,66 +435,51 @@ class RosenbrockWindow(QMainWindow):
         self._set_steps_table_empty_layout()
         self.steps_table.setMinimumHeight(190)
         self.steps_table.verticalHeader().setVisible(False)
-        self._configure_table(self.steps_table, min_row_height=31)
+        configure_data_table(self.steps_table, min_row_height=31, allow_selection=False, word_wrap=False)
         steps_layout.addWidget(self.steps_table)
-        table_layout.addWidget(steps_group)
-
-        plot_tab = QWidget()
-        plot_tab_layout = QVBoxLayout(plot_tab)
-        plot_tab_layout.setContentsMargins(0, 0, 0, 0)
-        plot_tab_layout.setSpacing(12)
+        table_content_layout.addWidget(steps_group)
+        self._set_results_tab_empty_state(True)
 
         plot_group = QGroupBox("Графики")
         plot_group.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         plot_layout = QVBoxLayout(plot_group)
-        self.formula_label = QLabel("Формула: —")
-        self.formula_label.setWordWrap(True)
-        self.formula_label.setStyleSheet("font-size: 13px; color: #c8d6ef;")
 
         mode_row = QWidget()
         mode_layout = QHBoxLayout(mode_row)
         mode_layout.setContentsMargins(0, 0, 0, 0)
         mode_layout.setSpacing(8)
-        mode_layout.addWidget(QLabel("Режим:"))
-        self.plot_mode_combo = QComboBox()
-        self.plot_mode_combo.addItem("Контуры 2D", "contour")
-        self.plot_mode_combo.addItem("3D поверхность", "surface")
-        self.plot_mode_combo.currentIndexChanged.connect(self._on_plot_mode_changed)
-        mode_layout.addWidget(self.plot_mode_combo)
+        mode_layout.addWidget(QLabel("Режим"))
+        self.plot_mode_group = QButtonGroup(self)
+        self.plot_mode_group.setExclusive(True)
+        mode_keys = ("contour", "surface")
+        mode_row_widget, mode_buttons = create_choice_chip_grid(
+            group=self.plot_mode_group,
+            options=(("Контуры 2D", "contour"), ("3D поверхность", "surface")),
+            columns=len(mode_keys),
+            horizontal_spacing=8,
+            vertical_spacing=8,
+            on_clicked=self._on_plot_mode_selected,
+        )
+        self.plot_mode_buttons = {key: button for key, button in zip(mode_keys, mode_buttons, strict=True)}
+        mode_layout.addWidget(mode_row_widget)
         mode_layout.addStretch(1)
 
-        self.canvas = MplCanvas()
+        self.canvas = PlotCanvas()
         self.canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.canvas.setMinimumHeight(620)
-        plot_layout.addWidget(self.formula_label)
         plot_layout.addWidget(mode_row)
         plot_layout.addWidget(self.canvas)
-        plot_tab_layout.addWidget(plot_group)
-
-        tabs.addTab(table_tab, "Таблицы")
-        tabs.addTab(plot_tab, "Графики")
+        workspace.plots_layout.addWidget(plot_group)
+        self.plot_mode_buttons["contour"].setChecked(True)
+        self._sync_plot_mode_button_styles()
         return panel
-
-    @staticmethod
-    def _configure_table(table: QTableWidget, min_row_height: int) -> None:
-        table.setAlternatingRowColors(True)
-        table.setWordWrap(False)
-        table.setTextElideMode(Qt.ElideRight)
-        table.setHorizontalScrollMode(QTableWidget.ScrollPerPixel)
-        table.setVerticalScrollMode(QTableWidget.ScrollPerPixel)
-        table.horizontalHeader().setDefaultAlignment(Qt.AlignCenter)
-        table.verticalHeader().setDefaultAlignment(Qt.AlignCenter)
-        table.verticalHeader().setDefaultSectionSize(min_row_height)
-        table.verticalHeader().setMinimumSectionSize(min_row_height)
 
     def _on_preset_selected(self, preset_key: str, checked: bool) -> None:
         if not checked:
             return
         self._apply_preset(preset_key)
         for key, button in self.preset_buttons.items():
-            button.setProperty("checked", "true" if key == preset_key else "false")
-            button.style().unpolish(button)
-            button.style().polish(button)
+            button.setChecked(key == preset_key)
 
     def _set_formula_preview(self, formula_text: str) -> None:
         self.formula_preview.setText(formula_text)
@@ -764,11 +536,13 @@ class RosenbrockWindow(QMainWindow):
             for j in range(self.coefficients_table.columnCount()):
                 item = self.coefficients_table.item(i, j)
                 raw = item.text().strip() if item and item.text().strip() else "0"
-                row.append(parse_float(raw, f"c[{i}][{j}]"))
+                row.append(parse_localized_float(raw, f"c[{i}][{j}]"))
             matrix.append(tuple(row))
         return tuple(matrix)
 
     def _run_clicked(self) -> None:
+        if self._run_task.is_running():
+            return
         try:
             matrix = self._read_coefficient_matrix()
             polynomial = build_polynomial(PRESET_CONFIGS[self._active_preset_key]["formula_text"], matrix)
@@ -778,27 +552,66 @@ class RosenbrockWindow(QMainWindow):
             QMessageBox.critical(self, "Ошибка ввода", str(exc))
             return
 
-        try:
-            batch_result, metrics = run_batch(polynomial, epsilons, starts)
-        except Exception as exc:
-            QMessageBox.critical(self, "Ошибка расчета", str(exc))
-            return
+        self._set_busy(True)
+        self._run_task.start(
+            "Выполняется расчёт...",
+            lambda: run_batch(polynomial, epsilons, starts),
+        )
 
+    def _on_run_succeeded(self, payload: object) -> None:
+        if not isinstance(payload, tuple) or len(payload) != 2:
+            self._set_busy(False)
+            return
+        batch_result, metrics = payload
+        if not isinstance(batch_result, BatchResult):
+            self._set_busy(False)
+            return
+        self._run_flow.apply(batch_result)
+        if hasattr(metrics, "trace_id"):
+            try:
+                self._save_artifacts(batch_result, trace_id=metrics.trace_id)
+            except Exception as exc:
+                QMessageBox.warning(self, "Сохранение артефактов", f"Не удалось сохранить артефакты: {exc}")
+        self._set_busy(False)
+
+    def _on_run_failed(self, message: str, _stack: str) -> None:
+        self._set_busy(False)
+        QMessageBox.critical(self, "Ошибка расчета", message)
+
+    def _assign_batch_result(self, batch_result: BatchResult) -> None:
         self._batch_result = batch_result
+
+    def _reset_batch_selection(self) -> None:
         self._selected_run_index = None
-        self.formula_label.setText(f"Формула: {format_polynomial(batch_result.polynomial)}")
+
+    def _render_batch_overview(self, batch_result: BatchResult) -> None:
         self._fill_summary_table(batch_result)
+
+    def _select_first_run_after_apply(self, batch_result: BatchResult) -> bool:
+        if not batch_result.runs:
+            return False
+        self._select_run(0, sync_table_selection=True)
+        return True
+
+    def _clear_batch_details(self) -> None:
+        self._set_results_tab_empty_state(True)
         self.steps_table.setRowCount(0)
         self._set_steps_table_empty_layout()
         self._clear_plot()
-        try:
-            artifacts_dir = self._save_artifacts(batch_result, trace_id=metrics.trace_id)
-            QMessageBox.information(self, "Артефакты сохранены", f"Папка: {artifacts_dir}")
-        except Exception as exc:
-            QMessageBox.warning(self, "Сохранение артефактов", f"Не удалось сохранить артефакты: {exc}")
 
-        if batch_result.runs:
-            self.summary_table.selectRow(0)
+    def _select_run(self, run_index: int, sync_table_selection: bool) -> None:
+        """Выбирает прогон и синхронно обновляет итерации и график."""
+        if self._batch_result is None:
+            return
+        if run_index < 0 or run_index >= len(self._batch_result.runs):
+            return
+
+        self._selected_run_index = run_index
+        run = self._batch_result.runs[run_index]
+        if sync_table_selection:
+            self.summary_table.selectRow(run_index)
+        self._fill_steps_table(run)
+        self._draw_run_plot(self._batch_result, run)
 
     def _fill_summary_table(self, batch_result: BatchResult) -> None:
         self.summary_table.setRowCount(len(batch_result.runs))
@@ -820,163 +633,25 @@ class RosenbrockWindow(QMainWindow):
                         item.setForeground(Qt.GlobalColor.green)
                 self.summary_table.setItem(index, col, item)
         if batch_result.runs:
+            self._set_results_tab_empty_state(False)
             self._set_summary_table_data_layout()
         else:
+            self._set_results_tab_empty_state(True)
             self._set_summary_table_empty_layout()
 
-    def _add_epsilon_input(self, value: str = "") -> None:
-        item = QWidget()
-        item_layout = QHBoxLayout(item)
-        item_layout.setContentsMargins(0, 0, 0, 0)
-        item_layout.setSpacing(ROW_CONTROL_SPACING)
-
-        epsilon_input = QLineEdit(str(value))
-        epsilon_input.setProperty("role", "epsilon-item")
-        epsilon_input.setPlaceholderText("ε")
-        epsilon_input.setFixedWidth(EPSILON_INPUT_WIDTH)
-        epsilon_input.setFixedHeight(CONTROL_BUTTON_SIZE)
-        epsilon_input.setAlignment(Qt.AlignCenter)
-        remove_button = QPushButton("−")
-        remove_button.setProperty("role", "epsilon-remove")
-        remove_button.clicked.connect(lambda _checked=False, line=epsilon_input: self._remove_epsilon_input(line))
-
-        item_layout.addWidget(epsilon_input)
-        item_layout.addWidget(remove_button)
-        item.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-        item.setFixedWidth(EPSILON_INPUT_WIDTH + CONTROL_BUTTON_SIZE + ROW_CONTROL_SPACING)
-        item.setFixedHeight(CONTROL_BUTTON_SIZE)
-        self.epsilon_fields_layout.addWidget(item)
-        self.epsilon_items.append((item, epsilon_input, remove_button))
-        self._update_epsilon_remove_buttons()
-        self._refresh_epsilon_container_width()
-        epsilon_scroll = self.epsilon_scroll.horizontalScrollBar()
-        if len(self.epsilon_items) > 1:
-            epsilon_scroll.setValue(epsilon_scroll.maximum())
-        else:
-            epsilon_scroll.setValue(0)
-
-    def _remove_epsilon_input(self, target: QLineEdit) -> None:
-        if len(self.epsilon_items) <= 1:
-            target.clear()
-            return
-
-        for idx, (item_widget, line_edit, _remove_button) in enumerate(self.epsilon_items):
-            if line_edit is not target:
-                continue
-            self.epsilon_items.pop(idx)
-            self.epsilon_fields_layout.removeWidget(item_widget)
-            item_widget.deleteLater()
-            break
-
-        self._update_epsilon_remove_buttons()
-        self._refresh_epsilon_container_width()
-
-    def _update_epsilon_remove_buttons(self) -> None:
-        disable_remove = len(self.epsilon_items) <= 1
-        for _item_widget, _line_edit, remove_button in self.epsilon_items:
-            remove_button.setDisabled(disable_remove)
-
-    def _refresh_epsilon_container_width(self) -> None:
-        self.epsilon_fields_container.adjustSize()
-        width = self.epsilon_fields_container.sizeHint().width()
-        height = self.epsilon_fields_container.sizeHint().height()
-        self.epsilon_fields_container.resize(width, max(height, 56))
-
     def _collect_epsilons_raw(self) -> str:
-        values = [field.text().strip() for _widget, field, _button in self.epsilon_items if field.text().strip()]
+        if self._epsilon_row is None:
+            raise ValueError("Список epsilon пуст.")
+        values = [row[0] for row in self._epsilon_row.rows() if row and row[0]]
         if not values:
             raise ValueError("Список epsilon пуст.")
         return ",".join(values)
 
-    def _add_start_point_input(self, x1_value: str = "", x2_value: str = "") -> None:
-        item = QWidget()
-        item_layout = QHBoxLayout(item)
-        item_layout.setContentsMargins(0, 0, 0, 0)
-        item_layout.setSpacing(ROW_CONTROL_SPACING)
-
-        x1_input = QLineEdit(str(x1_value))
-        x1_input.setProperty("role", "start-item")
-        x1_input.setPlaceholderText("x1")
-        x1_input.setFixedWidth(START_INPUT_WIDTH)
-        x1_input.setFixedHeight(CONTROL_BUTTON_SIZE)
-        x1_input.setAlignment(Qt.AlignCenter)
-
-        x2_input = QLineEdit(str(x2_value))
-        x2_input.setProperty("role", "start-item")
-        x2_input.setPlaceholderText("x2")
-        x2_input.setFixedWidth(START_INPUT_WIDTH)
-        x2_input.setFixedHeight(CONTROL_BUTTON_SIZE)
-        x2_input.setAlignment(Qt.AlignCenter)
-
-        separator = QLabel("—")
-        separator.setProperty("role", "start-separator")
-        separator.setAlignment(Qt.AlignCenter)
-        separator.setFixedWidth(START_SEPARATOR_WIDTH)
-
-        remove_button = QPushButton("−")
-        remove_button.setProperty("role", "start-remove")
-        remove_button.clicked.connect(lambda _checked=False, target=x1_input: self._remove_start_point_input(target))
-
-        item_layout.addWidget(x1_input)
-        item_layout.addWidget(separator)
-        item_layout.addWidget(x2_input)
-        item_layout.addWidget(remove_button)
-        item.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-        item.setFixedWidth(
-            START_INPUT_WIDTH
-            + START_SEPARATOR_WIDTH
-            + START_INPUT_WIDTH
-            + CONTROL_BUTTON_SIZE
-            + ROW_CONTROL_SPACING * 3
-        )
-        item.setFixedHeight(CONTROL_BUTTON_SIZE)
-
-        self.start_points_layout.addWidget(item)
-        self.start_point_items.append((item, x1_input, x2_input, remove_button))
-        self._update_start_point_remove_buttons()
-        self._refresh_start_points_container_width()
-        start_scroll = self.start_points_scroll.horizontalScrollBar()
-        if len(self.start_point_items) > 1:
-            start_scroll.setValue(start_scroll.maximum())
-        else:
-            start_scroll.setValue(0)
-
-    def _remove_start_point_input(self, target_x1: QLineEdit) -> None:
-        if len(self.start_point_items) <= 1:
-            for _item_widget, x1_input, x2_input, _button in self.start_point_items:
-                if x1_input is target_x1:
-                    x1_input.clear()
-                    x2_input.clear()
-                    break
-            return
-
-        for idx, (item_widget, x1_input, _x2_input, _remove_button) in enumerate(self.start_point_items):
-            if x1_input is not target_x1:
-                continue
-            self.start_point_items.pop(idx)
-            self.start_points_layout.removeWidget(item_widget)
-            item_widget.deleteLater()
-            break
-
-        self._update_start_point_remove_buttons()
-        self._refresh_start_points_container_width()
-
-    def _update_start_point_remove_buttons(self) -> None:
-        disable_remove = len(self.start_point_items) <= 1
-        for _item_widget, _x1_input, _x2_input, remove_button in self.start_point_items:
-            remove_button.setDisabled(disable_remove)
-
-    def _refresh_start_points_container_width(self) -> None:
-        self.start_points_container.adjustSize()
-        width = self.start_points_container.sizeHint().width()
-        height = self.start_points_container.sizeHint().height()
-        self.start_points_container.resize(width, max(height, 56))
-
     def _collect_start_points_raw(self) -> str:
+        if self._start_row is None:
+            raise ValueError("Список стартовых точек пуст.")
         points: list[str] = []
-        for _item_widget, x1_input, x2_input, _remove_button in self.start_point_items:
-            x1_value = x1_input.text().strip()
-            x2_value = x2_input.text().strip()
+        for x1_value, x2_value in self._start_row.rows():
             if not x1_value and not x2_value:
                 continue
             if not x1_value or not x2_value:
@@ -987,23 +662,19 @@ class RosenbrockWindow(QMainWindow):
         return " | ".join(points)
 
     def _set_start_points_raw(self, raw: str) -> None:
-        for item_widget, _x1, _x2, _button in self.start_point_items:
-            self.start_points_layout.removeWidget(item_widget)
-            item_widget.deleteLater()
-        self.start_point_items.clear()
-
+        if self._start_row is None:
+            return
         chunks = [chunk.strip() for chunk in raw.split("|") if chunk.strip()]
         if not chunks:
-            self._add_start_point_input()
+            self._start_row.reset((("", ""),))
             return
+        values: list[tuple[str, str]] = []
         for chunk in chunks:
             parts = [part.strip() for part in chunk.split(";")]
             if len(parts) != 2:
                 continue
-            self._add_start_point_input(parts[0], parts[1])
-        if not self.start_point_items:
-            self._add_start_point_input()
-        self.start_points_scroll.horizontalScrollBar().setValue(0)
+            values.append((parts[0], parts[1]))
+        self._start_row.reset(tuple(values) if values else (("", ""),))
 
     def _on_summary_selection_changed(self) -> None:
         if not self._batch_result:
@@ -1011,15 +682,13 @@ class RosenbrockWindow(QMainWindow):
         selected_indexes = self.summary_table.selectionModel().selectedRows()
         if not selected_indexes:
             return
-        run_index = selected_indexes[0].row()
-        if run_index < 0 or run_index >= len(self._batch_result.runs):
-            return
-        self._selected_run_index = run_index
-        run = self._batch_result.runs[run_index]
-        self._fill_steps_table(run)
-        self._draw_run_plot(self._batch_result, run)
+        self._select_run(selected_indexes[0].row(), sync_table_selection=False)
 
-    def _on_plot_mode_changed(self) -> None:
+    def _on_plot_mode_selected(self, mode_key: str, checked: bool) -> None:
+        if not checked:
+            return
+        self._plot_mode = mode_key
+        self._sync_plot_mode_button_styles()
         if not self._batch_result or self._selected_run_index is None:
             self._clear_plot()
             return
@@ -1029,31 +698,33 @@ class RosenbrockWindow(QMainWindow):
         run = self._batch_result.runs[self._selected_run_index]
         self._draw_run_plot(self._batch_result, run)
 
+    def _sync_plot_mode_button_styles(self) -> None:
+        for mode_key, button in self.plot_mode_buttons.items():
+            button.setChecked(mode_key == self._plot_mode)
+
+    def _set_busy(self, busy: bool) -> None:
+        self._controls_panel.setEnabled(not busy)
+
+    def _set_results_tab_empty_state(self, is_empty: bool) -> None:
+        if self.results_tab_stack is None:
+            return
+        self.results_tab_stack.set_empty(is_empty)
+
     def _set_summary_table_empty_layout(self) -> None:
         """Пустая таблица итогов должна занимать ширину равномерно."""
-        self.summary_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        set_table_empty_layout(self.summary_table)
 
     def _set_summary_table_data_layout(self) -> None:
         """Для данных: ширина по содержимому + горизонтальный скролл."""
-        header = self.summary_table.horizontalHeader()
-        header.setSectionResizeMode(QHeaderView.Interactive)
-        self.summary_table.resizeColumnsToContents()
-        min_widths = [48, 76, 140, 140, 110, 58, 120]
-        for column, min_width in enumerate(min_widths):
-            self.summary_table.setColumnWidth(column, max(self.summary_table.columnWidth(column), min_width))
+        set_table_data_layout(self.summary_table, [48, 76, 140, 140, 110, 58, 120])
 
     def _set_steps_table_empty_layout(self) -> None:
         """Для пустого состояния убираем визуальный «обрубок» справа."""
-        self.steps_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        set_table_empty_layout(self.steps_table)
 
     def _set_steps_table_data_layout(self) -> None:
         """Для данных: ширина по содержимому + горизонтальный скролл."""
-        header = self.steps_table.horizontalHeader()
-        header.setSectionResizeMode(QHeaderView.Interactive)
-        self.steps_table.resizeColumnsToContents()
-        min_widths = [52, 112, 92, 44, 112, 112, 92, 92, 120, 110]
-        for column, min_width in enumerate(min_widths):
-            self.steps_table.setColumnWidth(column, max(self.steps_table.columnWidth(column), min_width))
+        set_table_data_layout(self.steps_table, [52, 112, 92, 44, 112, 112, 92, 92, 120, 110])
 
     def _fill_steps_table(self, run: SolverResult) -> None:
         self.steps_table.setRowCount(len(run.steps))
@@ -1099,10 +770,10 @@ class RosenbrockWindow(QMainWindow):
         mesh_x, mesh_y = np.meshgrid(grid_x, grid_y)
         mesh_z = self._evaluate_mesh(batch_result, mesh_x, mesh_y)
 
-        with mpl.rc_context(MATPLOTLIB_DARK_RC):
+        with dark_plot_context():
             self.canvas.figure.clear()
             self.canvas.figure.patch.set_facecolor("#171b24")
-            mode = str(self.plot_mode_combo.currentData())
+            mode = self._plot_mode
             if mode == "surface":
                 ax_surface = self.canvas.figure.add_subplot(1, 1, 1, projection="3d")
                 z_clipped = np.clip(mesh_z, np.nanpercentile(mesh_z, 5), np.nanpercentile(mesh_z, 95))
@@ -1296,7 +967,7 @@ class RosenbrockWindow(QMainWindow):
         mesh_x, mesh_y = np.meshgrid(grid_x, grid_y)
         mesh_z = self._evaluate_mesh(batch_result, mesh_x, mesh_y)
 
-        with mpl.rc_context(MATPLOTLIB_DARK_RC):
+        with dark_plot_context():
             figure = Figure(figsize=(9.0, 6.0), dpi=120)
             figure.patch.set_facecolor("#171b24")
             if mode == "surface":
@@ -1409,24 +1080,10 @@ class RosenbrockWindow(QMainWindow):
         return result
 
     def _clear_plot(self) -> None:
-        self.canvas.figure.clear()
-        self.canvas.figure.patch.set_facecolor("#171b24")
-        ax = self.canvas.figure.add_subplot(1, 1, 1)
-        ax.set_facecolor("#10141f")
-        ax.set_xticks([])
-        ax.set_yticks([])
-        for spine in ax.spines.values():
-            spine.set_color("#324866")
-        ax.text(
-            0.5,
-            0.5,
-            "Выберите запуск из таблицы, чтобы увидеть графики",
-            ha="center",
-            va="center",
-            color="#c8cfdb",
-            fontsize=12,
+        clear_plot_canvas(
+            self.canvas,
+            message="Выберите запуск из таблицы, чтобы увидеть графики",
         )
-        self.canvas.draw_idle()
 
     @staticmethod
     def _format_point(point: tuple[float, ...]) -> str:

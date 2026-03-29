@@ -5,10 +5,14 @@ from __future__ import annotations
 import ast
 import math
 from collections.abc import Callable
+from typing import TypeAlias
 
 from lr3.domain.models import Point2D
 
-_ALLOWED_FUNCTIONS: dict[str, Callable[[float], float] | Callable[[float, float], float]] = {
+NumericCallable: TypeAlias = Callable[..., float]
+NamespaceValue: TypeAlias = float | NumericCallable
+
+_ALLOWED_FUNCTIONS: dict[str, NumericCallable] = {
     "sin": math.sin,
     "cos": math.cos,
     "tan": math.tan,
@@ -94,7 +98,7 @@ def compile_objective(expression: str) -> Callable[[Point2D], float]:
 
     def objective(point: Point2D) -> float:
         x1, x2 = point
-        namespace: dict[str, float | Callable[[float], float] | Callable[[float, float], float]] = {
+        namespace: dict[str, NamespaceValue] = {
             "x1": float(x1),
             "x2": float(x2),
             **_ALLOWED_CONSTANTS,
@@ -108,30 +112,34 @@ def compile_objective(expression: str) -> Callable[[Point2D], float]:
 
 def _evaluate_node(
     node: ast.AST,
-    namespace: dict[str, float | Callable[[float], float] | Callable[[float, float], float]],
+    namespace: dict[str, NamespaceValue],
 ) -> float:
     if isinstance(node, ast.Constant):
+        if not isinstance(node.value, (int, float)):
+            raise ExpressionError("Разрешены только числовые константы.")
         return float(node.value)
 
     if isinstance(node, ast.Name):
         value = namespace[node.id]
-        if not isinstance(value, float):
+        if not isinstance(value, (int, float)):
             raise ExpressionError(f"Идентификатор '{node.id}' не является числом")
         return float(value)
 
     if isinstance(node, ast.BinOp):
         left = _evaluate_node(node.left, namespace)
         right = _evaluate_node(node.right, namespace)
-        operation = _BINARY_DISPATCH[type(node.op)]
-        return float(operation(left, right))
+        binary_operation = _BINARY_DISPATCH[type(node.op)]
+        return float(binary_operation(left, right))
 
     if isinstance(node, ast.UnaryOp):
         operand = _evaluate_node(node.operand, namespace)
-        operation = _UNARY_DISPATCH[type(node.op)]
-        return float(operation(operand))
+        unary_operation = _UNARY_DISPATCH[type(node.op)]
+        return float(unary_operation(operand))
 
     if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
         function = namespace[node.func.id]
+        if not callable(function):
+            raise ExpressionError(f"Идентификатор '{node.func.id}' не является функцией")
         arguments = [_evaluate_node(argument, namespace) for argument in node.args]
         result = function(*arguments)
         return float(result)

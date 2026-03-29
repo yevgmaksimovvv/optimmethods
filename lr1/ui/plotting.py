@@ -17,7 +17,6 @@ from lr1.domain.models import FunctionSpec, GridRunResult, SearchResult
 from lr1.infrastructure.logging import configure_logging
 from lr1.infrastructure.settings import FORBIDDEN_POINT_TOLERANCE
 
-
 configure_logging()
 logger = logging.getLogger("lr1.plotting")
 

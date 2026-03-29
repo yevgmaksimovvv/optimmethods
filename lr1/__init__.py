@@ -2,5 +2,4 @@
 
 from lr1.main import main
 
-
 __all__ = ("main",)

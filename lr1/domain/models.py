@@ -15,7 +15,6 @@ from typing import Callable, Dict, List, Optional, Tuple
 
 from lr1.infrastructure.logging import configure_logging
 
-
 configure_logging()
 logger = logging.getLogger("lr1.app_models")
 

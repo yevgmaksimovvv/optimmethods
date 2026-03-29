@@ -7,6 +7,8 @@ import time
 import uuid
 from dataclasses import dataclass
 
+from optim_core.parsing import parse_localized_float
+
 from lr3.domain.expression import ExpressionError, compile_objective
 from lr3.domain.methods import conjugate_gradient_ascent, gradient_ascent
 from lr3.domain.models import MethodConfig, OptimizationResult, Point2D
@@ -25,15 +27,6 @@ class ServiceMetrics:
     latency_ms: float
     success: bool
 
-
-def parse_float(value: str, field_name: str) -> float:
-    """Безопасный парсинг float-параметра."""
-    try:
-        return float(value.replace(",", "."))
-    except ValueError as exc:
-        raise ValueError(f"Неверное число в поле '{field_name}': {value}") from exc
-
-
 def parse_int(value: str, field_name: str) -> int:
     """Безопасный парсинг целого параметра."""
     try:
@@ -45,8 +38,8 @@ def parse_int(value: str, field_name: str) -> int:
 def build_start_point(x1_raw: str, x2_raw: str) -> Point2D:
     """Создаёт стартовую точку из UI-строк."""
     return (
-        parse_float(x1_raw, "x1"),
-        parse_float(x2_raw, "x2"),
+        parse_localized_float(x1_raw, "x1"),
+        parse_localized_float(x2_raw, "x2"),
     )
 
 
@@ -60,12 +53,12 @@ def build_config(
     max_step_expansions_raw: str = "16",
 ) -> MethodConfig:
     """Валидирует и строит конфиг метода."""
-    epsilon = parse_float(epsilon_raw, "epsilon")
+    epsilon = parse_localized_float(epsilon_raw, "epsilon")
     max_iterations = parse_int(max_iterations_raw, "max_iterations")
-    initial_step = parse_float(initial_step_raw, "initial_step")
-    timeout_seconds = parse_float(timeout_raw, "timeout_seconds")
-    min_step = parse_float(min_step_raw, "min_step")
-    gradient_step = parse_float(gradient_step_raw, "gradient_step")
+    initial_step = parse_localized_float(initial_step_raw, "initial_step")
+    timeout_seconds = parse_localized_float(timeout_raw, "timeout_seconds")
+    min_step = parse_localized_float(min_step_raw, "min_step")
+    gradient_step = parse_localized_float(gradient_step_raw, "gradient_step")
     max_step_expansions = parse_int(max_step_expansions_raw, "max_step_expansions")
 
     if epsilon <= 0:

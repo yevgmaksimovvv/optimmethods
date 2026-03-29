@@ -15,7 +15,6 @@ from lr1.domain.models import IterationRow, MethodSpec, SearchResult
 from lr1.domain.numerical import choose_side, scaled_interval_shift
 from lr1.infrastructure.logging import configure_logging
 
-
 configure_logging()
 logger = logging.getLogger("lr1.search_methods")
 

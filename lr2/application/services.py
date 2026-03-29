@@ -8,6 +8,8 @@ import uuid
 from dataclasses import dataclass
 from typing import Final
 
+from optim_core.parsing import parse_localized_float
+
 from lr2.domain.models import BatchResult, Polynomial2D, SolverConfig, SolverResult, normalize_coefficients
 from lr2.domain.polynomial import evaluate_polynomial, format_polynomial
 from lr2.domain.rosenbrock import rosenbrock_minimize
@@ -55,21 +57,12 @@ VARIANT_PRESETS: dict[str, tuple[tuple[float, ...], ...]] = {
     ),
 }
 
-
-def parse_float(value: str, field_name: str) -> float:
-    """Парсит float с поддержкой запятой."""
-    try:
-        return float(value.replace(",", "."))
-    except ValueError as exc:
-        raise ValueError(f"Неверное число в поле '{field_name}': {value}") from exc
-
-
 def parse_epsilons(raw: str) -> tuple[float, ...]:
     """Парсит список epsilon через запятую."""
     parts = [item.strip() for item in raw.split(",") if item.strip()]
     if not parts:
         raise ValueError("Список epsilon пуст.")
-    values = tuple(parse_float(item, "epsilon") for item in parts)
+    values = tuple(parse_localized_float(item, "epsilon") for item in parts)
     if any(item <= 0 for item in values):
         raise ValueError("Все epsilon должны быть > 0.")
     return values
@@ -89,7 +82,7 @@ def parse_points(raw: str) -> tuple[tuple[float, float], ...]:
                 "Неверный формат стартовой точки. Используй 'x1;x2', "
                 "а точки разделяй символом '|'."
             )
-        points.append((parse_float(parts[0], "x1"), parse_float(parts[1], "x2")))
+        points.append((parse_localized_float(parts[0], "x1"), parse_localized_float(parts[1], "x2")))
 
     return tuple(points)
 

@@ -1,17 +1,56 @@
-"""Tkinter GUI для ЛР3."""
+"""GUI для ЛР3: градиентные методы в стиле ЛР1/ЛР2."""
 
 from __future__ import annotations
 
-import tkinter as tk
-from tkinter import messagebox, scrolledtext, ttk
+import math
+import sys
+from dataclasses import dataclass
 
-import matplotlib.pyplot as plt
 import numpy as np
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from optim_core.ui import (
+    ControlsPanel,
+    DarkQtThemeTokens,
+    MathHeaderView,
+    PlotCanvas,
+    TaskController,
+    add_parameter_row,
+    build_choice_chip_styles,
+    build_dark_qt_base_styles,
+    clear_plot_canvas,
+    configure_data_table,
+    configure_two_panel_splitter,
+    create_choice_chip_grid,
+    create_controls_panel,
+    create_parameter_grid,
+    create_primary_action_button,
+    create_results_workspace,
+    create_scroll_container,
+    create_standard_group,
+    dark_plot_context,
+    set_table_data_layout,
+    set_table_empty_layout,
+)
+from PySide6.QtCore import Qt  # type: ignore[import-not-found]
+from PySide6.QtWidgets import (  # type: ignore[import-not-found]
+    QApplication,
+    QButtonGroup,
+    QGroupBox,
+    QLabel,
+    QLineEdit,
+    QMainWindow,
+    QMessageBox,
+    QSizePolicy,
+    QSplitter,
+    QTableWidget,
+    QTableWidgetItem,
+    QVBoxLayout,
+    QWidget,
+)
 
 from lr3.application.services import (
     DEFAULT_CONJUGATE_EXPRESSION,
     DEFAULT_GRADIENT_EXPRESSION,
+    ServiceMetrics,
     build_config,
     build_start_point,
     run_conjugate,
@@ -20,268 +59,563 @@ from lr3.application.services import (
 from lr3.domain.expression import compile_objective
 from lr3.domain.models import OptimizationResult
 
-APP_TITLE = "ЛР3 — градиентные методы"
+APP_TITLE = "ЛР3 — Градиентные методы"
 
 
-class Lr3Window:
-    """Главное окно ЛР3."""
+@dataclass(frozen=True)
+class RunPayload:
+    """Результат одного запуска для UI-потока."""
 
-    def __init__(self, root: tk.Tk):
-        self.root = root
-        self.root.title(APP_TITLE)
-        self.root.geometry("1440x860")
+    expression: str
+    result: OptimizationResult
+    metrics: ServiceMetrics
 
-        notebook = ttk.Notebook(root)
-        notebook.pack(fill="both", expand=True, padx=10, pady=10)
 
-        self._build_method_tab(
-            notebook=notebook,
-            tab_title="Градиентный метод",
-            default_expression=DEFAULT_GRADIENT_EXPRESSION,
-            default_x1="0",
-            default_x2="0",
-            default_step="0.1",
-            default_epsilon="1e-6",
-            default_iterations="1000",
-            default_timeout="3.0",
-            run_callback=self._run_gradient,
+class GradientMethodsWindow(QMainWindow):
+    """Главное окно ЛР3 в Qt-стеке проекта."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.setWindowTitle(APP_TITLE)
+        self.resize(1530, 960)
+        self._apply_styles()
+
+        self._last_payload: RunPayload | None = None
+        self._run_task = TaskController(self)
+        self._run_task.succeeded.connect(self._on_run_succeeded)
+        self._run_task.failed.connect(self._on_run_failed)
+
+        root = QWidget()
+        root_layout = QVBoxLayout(root)
+        root_layout.setContentsMargins(12, 12, 12, 12)
+        root_layout.setSpacing(12)
+
+        splitter = QSplitter(Qt.Horizontal)
+        root_layout.addWidget(splitter)
+        self.setCentralWidget(root)
+
+        controls = self._build_controls_panel()
+        controls_scroll = create_scroll_container(
+            controls,
+            widget_resizable=True,
+            horizontal_policy=Qt.ScrollBarAlwaysOff,
+        )
+        results = self._build_results_panel()
+
+        configure_two_panel_splitter(
+            splitter,
+            left=controls_scroll,
+            right=results,
+            left_size=510,
+            right_size=1020,
+            handle_width=8,
         )
 
-        self._build_method_tab(
-            notebook=notebook,
-            tab_title="Сопряжённые градиенты",
-            default_expression=DEFAULT_CONJUGATE_EXPRESSION,
-            default_x1="1",
-            default_x2="1",
-            default_step="0.2",
-            default_epsilon="1e-6",
-            default_iterations="300",
-            default_timeout="3.0",
-            run_callback=self._run_conjugate,
+        self.method_buttons["gradient"].setChecked(True)
+        self._set_method_defaults("gradient", True)
+        self._set_results_empty_state(True)
+        self._clear_plot()
+
+    def _apply_styles(self) -> None:
+        self.setStyleSheet(
+            build_dark_qt_base_styles(
+                DarkQtThemeTokens(
+                    background="#1b1f2a",
+                    text="#f0f2f5",
+                    font_family='"Segoe UI", "Helvetica Neue", "Arial", sans-serif',
+                    group_border="#3f4a62",
+                    group_radius_px=12,
+                    group_padding_px=13,
+                    group_title_color="#dde5f3",
+                    button_bg="#2b3447",
+                    button_border="#4b5873",
+                    button_hover_bg="#36415a",
+                    button_pressed_bg="#242d3d",
+                    button_disabled_bg="#1f2533",
+                    button_disabled_text="#66738d",
+                    button_disabled_border="#3c465f",
+                    primary_bg="#0f7aff",
+                    primary_border="#3b94ff",
+                    primary_hover_bg="#2588ff",
+                    primary_pressed_bg="#0d66d8",
+                    tab_bg="#2c303b",
+                    tab_border="#4b4f5c",
+                    tab_selected_bg="#46516b",
+                    tab_selected_border="#647596",
+                )
+            )
+            + """
+            QLineEdit {
+                background: #131824;
+                border: 1px solid #3f4a62;
+                border-radius: 8px;
+                padding: 7px 10px;
+                color: #f5f7fb;
+                selection-background-color: #2379ff;
+                min-height: 24px;
+            }
+            QLineEdit:focus { border: 1px solid #2f8fff; }
+            QLabel[role="parameter-label"] {
+                color: #dce6f5;
+                font-size: 15px;
+                font-weight: 600;
+            }
+            QLabel#SectionCaption {
+                color: #9aa5bb;
+                font-size: 12px;
+                font-weight: 700;
+                letter-spacing: 0.04em;
+                text-transform: uppercase;
+            }
+            QLabel[role="formula-preview"] {
+                background: #101827;
+                border: 1px solid #304665;
+                border-radius: 12px;
+                padding: 10px 14px;
+                color: #ecf3ff;
+                font-size: 18px;
+                font-weight: 700;
+            }
+            QLabel#SummaryEmptyTitle {
+                color: #eef2f8;
+                font-size: 22px;
+                font-weight: 700;
+            }
+            QLabel#SummaryEmptyText {
+                color: #b8c1d1;
+                font-size: 15px;
+            }
+            QWidget#SummaryEmptyCard {
+                background: #181b24;
+                border: 1px solid #31384a;
+                border-radius: 14px;
+            }
+            QTableWidget {
+                background: #12161d;
+                border: 1px solid #464b59;
+                border-radius: 8px;
+                color: #f5f7fb;
+                gridline-color: #2d3241;
+                selection-background-color: #2a6df4;
+                alternate-background-color: #151b25;
+                font-family: "SF Mono", "Menlo", "Consolas", monospace;
+                font-size: 14px;
+            }
+            QHeaderView::section {
+                background: #222938;
+                color: #dbe2ee;
+                border: 0;
+                border-right: 1px solid #33415b;
+                border-bottom: 1px solid #33415b;
+                padding: 6px 8px;
+                font-size: 12px;
+                font-weight: 700;
+            }
+            QTableCornerButton::section {
+                background: #222938;
+                border: 0;
+                border-right: 1px solid #33415b;
+                border-bottom: 1px solid #33415b;
+            }
+            QSplitter::handle {
+                background: #2a3549;
+                border-radius: 3px;
+            }
+            """
+            + build_choice_chip_styles()
         )
 
-    def _build_method_tab(
-        self,
-        notebook: ttk.Notebook,
-        tab_title: str,
-        default_expression: str,
-        default_x1: str,
-        default_x2: str,
-        default_step: str,
-        default_epsilon: str,
-        default_iterations: str,
-        default_timeout: str,
-        run_callback,
-    ) -> dict[str, object]:
-        frame = ttk.Frame(notebook)
-        notebook.add(frame, text=tab_title)
+    def _build_controls_panel(self) -> QWidget:
+        controls: ControlsPanel = create_controls_panel(min_width=500, max_width=560, spacing=12)
+        panel = controls.panel
+        layout = controls.layout
 
-        left = ttk.Frame(frame)
-        left.pack(side="left", fill="both", expand=True, padx=10, pady=10)
-        right = ttk.Frame(frame)
-        right.pack(side="right", fill="both", expand=True, padx=10, pady=10)
+        method_group, method_layout = create_standard_group("Метод")
+        method_caption = QLabel("Выбор метода")
+        method_caption.setObjectName("SectionCaption")
+        method_layout.addWidget(method_caption)
 
-        form = ttk.LabelFrame(left, text="Параметры", padding=10)
-        form.pack(fill="x", pady=6)
+        self.method_group = QButtonGroup(self)
+        self.method_group.setExclusive(True)
+        method_keys = ("gradient", "conjugate")
+        method_row, method_buttons = create_choice_chip_grid(
+            group=self.method_group,
+            options=(("Градиентный", "gradient"), ("Сопряжённые градиенты", "conjugate")),
+            columns=2,
+            on_clicked=self._set_method_defaults,
+        )
+        self.method_buttons = {key: button for key, button in zip(method_keys, method_buttons, strict=True)}
+        method_layout.addWidget(method_row)
 
-        ttk.Label(form, text="F(x1, x2) =").grid(row=0, column=0, sticky="w")
-        expression_entry = ttk.Entry(form, width=52)
-        expression_entry.grid(row=0, column=1, padx=6, pady=2, sticky="ew")
-        expression_entry.insert(0, default_expression)
+        objective_group, objective_layout = create_standard_group("Целевая функция")
+        expression_caption = QLabel("F(x1, x2)")
+        expression_caption.setObjectName("SectionCaption")
+        objective_layout.addWidget(expression_caption)
 
-        ttk.Label(form, text="x1(0):").grid(row=1, column=0, sticky="w")
-        x1_entry = ttk.Entry(form, width=18)
-        x1_entry.grid(row=1, column=1, padx=6, pady=2, sticky="w")
-        x1_entry.insert(0, default_x1)
+        self.expression_input = QLineEdit()
+        self.expression_input.setPlaceholderText("Например: -(x1-1)^2 - 2*(x2+3)^2")
+        objective_layout.addWidget(self.expression_input)
 
-        ttk.Label(form, text="x2(0):").grid(row=2, column=0, sticky="w")
-        x2_entry = ttk.Entry(form, width=18)
-        x2_entry.grid(row=2, column=1, padx=6, pady=2, sticky="w")
-        x2_entry.insert(0, default_x2)
+        self.formula_preview = QLabel()
+        self.formula_preview.setProperty("role", "formula-preview")
+        self.formula_preview.setTextFormat(Qt.RichText)
+        self.formula_preview.setWordWrap(True)
+        self.formula_preview.setAlignment(Qt.AlignCenter)
+        self.formula_preview.setMinimumHeight(74)
+        objective_layout.addWidget(self.formula_preview)
 
-        ttk.Label(form, text="Начальный шаг:").grid(row=3, column=0, sticky="w")
-        step_entry = ttk.Entry(form, width=18)
-        step_entry.grid(row=3, column=1, padx=6, pady=2, sticky="w")
-        step_entry.insert(0, default_step)
+        params_group = QGroupBox("Параметры")
+        params_layout = create_parameter_grid(params_group)
 
-        ttk.Label(form, text="epsilon:").grid(row=4, column=0, sticky="w")
-        epsilon_entry = ttk.Entry(form, width=18)
-        epsilon_entry.grid(row=4, column=1, padx=6, pady=2, sticky="w")
-        epsilon_entry.insert(0, default_epsilon)
+        self.start_x1_input = QLineEdit()
+        self.start_x2_input = QLineEdit()
+        self.epsilon_input = QLineEdit()
+        self.max_iterations_input = QLineEdit()
+        self.initial_step_input = QLineEdit()
+        self.timeout_input = QLineEdit()
+        self.min_step_input = QLineEdit()
+        self.gradient_step_input = QLineEdit()
+        self.max_step_expansions_input = QLineEdit()
 
-        ttk.Label(form, text="max_iterations:").grid(row=5, column=0, sticky="w")
-        iterations_entry = ttk.Entry(form, width=18)
-        iterations_entry.grid(row=5, column=1, padx=6, pady=2, sticky="w")
-        iterations_entry.insert(0, default_iterations)
+        add_parameter_row(params_layout, row=0, label="x1(0)", control=self.start_x1_input)
+        add_parameter_row(params_layout, row=1, label="x2(0)", control=self.start_x2_input)
+        add_parameter_row(params_layout, row=2, label="epsilon", control=self.epsilon_input)
+        add_parameter_row(params_layout, row=3, label="max_iterations", control=self.max_iterations_input)
+        add_parameter_row(params_layout, row=4, label="initial_step", control=self.initial_step_input)
+        add_parameter_row(params_layout, row=5, label="timeout_seconds", control=self.timeout_input)
+        add_parameter_row(params_layout, row=6, label="min_step", control=self.min_step_input)
+        add_parameter_row(params_layout, row=7, label="gradient_step", control=self.gradient_step_input)
+        add_parameter_row(
+            params_layout,
+            row=8,
+            label="max_step_expansions",
+            control=self.max_step_expansions_input,
+        )
 
-        ttk.Label(form, text="timeout (сек):").grid(row=6, column=0, sticky="w")
-        timeout_entry = ttk.Entry(form, width=18)
-        timeout_entry.grid(row=6, column=1, padx=6, pady=2, sticky="w")
-        timeout_entry.insert(0, default_timeout)
+        self.run_button = create_primary_action_button(text="Рассчитать", on_click=self._run_clicked)
 
-        buttons = ttk.Frame(left)
-        buttons.pack(fill="x", pady=8)
+        layout.addWidget(method_group)
+        layout.addWidget(objective_group)
+        layout.addWidget(params_group)
+        layout.addWidget(self.run_button)
+        layout.addStretch(1)
+        return panel
 
-        output = scrolledtext.ScrolledText(left, height=18)
-        output.pack(fill="both", expand=True)
+    def _build_results_panel(self) -> QWidget:
+        workspace = create_results_workspace(
+            results_title="Таблицы",
+            plot_title="Графики",
+            with_tables_empty_state=True,
+            tables_empty_title="Пока нет результатов",
+            tables_empty_description=(
+                "Слева выбери метод, формулу и параметры запуска.\n"
+                "После расчёта здесь появятся итог и таблица итераций."
+            ),
+            tables_empty_hint="Нажми «Рассчитать», чтобы получить результат.",
+        )
 
-        run_button = ttk.Button(buttons, text="Запустить", command=lambda: run_callback(widgets))
-        run_button.pack(side="left", padx=4)
-        clear_button = ttk.Button(buttons, text="Очистить", command=lambda: output.delete("1.0", tk.END))
-        clear_button.pack(side="left", padx=4)
+        self.results_empty_stack = workspace.tables_empty_stack
+        if self.results_empty_stack is None:
+            raise RuntimeError("Ожидался EmptyStateStack для вкладки таблиц")
 
-        figure = plt.Figure(figsize=(7.0, 6.0), dpi=100)
-        canvas = FigureCanvasTkAgg(figure, right)
-        canvas.get_tk_widget().pack(fill="both", expand=True)
+        summary_group = QGroupBox("Итог запуска")
+        summary_layout = QVBoxLayout(summary_group)
+        self.summary_table = QTableWidget(0, 8)
+        self.summary_table.setHorizontalHeaderLabels(
+            ["Метод", "Trace ID", "Старт", "x*", "f(x*)", "N", "Успех", "Причина"]
+        )
+        summary_header = MathHeaderView(Qt.Horizontal, self.summary_table)
+        self.summary_table.setHorizontalHeader(summary_header)
+        summary_header.set_math_labels(["Метод", "Trace ID", "Старт", "x*", "f(x*)", "N", "Успех", "Причина"])
+        self.summary_table.verticalHeader().setVisible(False)
+        self.summary_table.horizontalHeader().setDefaultAlignment(Qt.AlignCenter)
+        self.summary_table.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.summary_table.setTextElideMode(Qt.ElideNone)
+        configure_data_table(self.summary_table, min_row_height=31, allow_selection=False, word_wrap=False)
+        self._set_summary_table_empty_layout()
+        summary_layout.addWidget(self.summary_table)
+        workspace.tables_layout.addWidget(summary_group)
 
-        widgets: dict[str, object] = {
-            "expression": expression_entry,
-            "x1": x1_entry,
-            "x2": x2_entry,
-            "step": step_entry,
-            "epsilon": epsilon_entry,
-            "iterations": iterations_entry,
-            "timeout": timeout_entry,
-            "output": output,
-            "figure": figure,
-            "canvas": canvas,
-            "run_button": run_button,
+        steps_group = QGroupBox("Итерации")
+        steps_layout = QVBoxLayout(steps_group)
+        self.steps_table = QTableWidget(0, 6)
+        self.steps_table.setHorizontalHeaderLabels(["k", "x1", "x2", "F(x)", "||grad||", "step"])
+        steps_header = MathHeaderView(Qt.Horizontal, self.steps_table)
+        self.steps_table.setHorizontalHeader(steps_header)
+        steps_header.set_math_labels(["k", "x<sub>1</sub>", "x<sub>2</sub>", "F(x)", "||grad||", "step"])
+        self.steps_table.verticalHeader().setVisible(False)
+        self.steps_table.horizontalHeader().setDefaultAlignment(Qt.AlignCenter)
+        self.steps_table.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.steps_table.setTextElideMode(Qt.ElideNone)
+        configure_data_table(self.steps_table, min_row_height=31, allow_selection=False, word_wrap=False)
+        self._set_steps_table_empty_layout()
+        steps_layout.addWidget(self.steps_table)
+        workspace.tables_layout.addWidget(steps_group)
+
+        plot_group = QGroupBox("Графики")
+        plot_group.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        plot_layout = QVBoxLayout(plot_group)
+
+        self.canvas = PlotCanvas()
+        self.canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.canvas.setMinimumHeight(620)
+        plot_layout.addWidget(self.canvas)
+        workspace.plots_layout.addWidget(plot_group)
+
+        return workspace.panel
+
+    def _set_method_defaults(self, method: str, checked: bool) -> None:
+        if not checked:
+            return
+        defaults = {
+            "gradient": {
+                "expr": DEFAULT_GRADIENT_EXPRESSION,
+                "x1": "0",
+                "x2": "0",
+                "step": "0.1",
+                "eps": "1e-6",
+                "iters": "1000",
+                "timeout": "3.0",
+            },
+            "conjugate": {
+                "expr": DEFAULT_CONJUGATE_EXPRESSION,
+                "x1": "1",
+                "x2": "1",
+                "step": "0.2",
+                "eps": "1e-6",
+                "iters": "300",
+                "timeout": "3.0",
+            },
         }
-        return widgets
+        config = defaults[method]
+        self.expression_input.setText(config["expr"])
+        self.start_x1_input.setText(config["x1"])
+        self.start_x2_input.setText(config["x2"])
+        self.initial_step_input.setText(config["step"])
+        self.epsilon_input.setText(config["eps"])
+        self.max_iterations_input.setText(config["iters"])
+        self.timeout_input.setText(config["timeout"])
+        self.min_step_input.setText("1e-8")
+        self.gradient_step_input.setText("1e-6")
+        self.max_step_expansions_input.setText("16")
+        self.formula_preview.setText(
+            "F(x<sub>1</sub>, x<sub>2</sub>) = "
+            f"<code>{self.expression_input.text().replace('*', '&#8727;')}</code>"
+        )
 
-    def _run_gradient(self, widgets: dict[str, object]) -> None:
-        self._execute("gradient", widgets)
+    def _run_clicked(self) -> None:
+        if self._run_task.is_running():
+            return
+        method = self._selected_method()
+        if method is None:
+            QMessageBox.critical(self, "Ошибка ввода", "Выбери метод оптимизации.")
+            return
 
-    def _run_conjugate(self, widgets: dict[str, object]) -> None:
-        self._execute("conjugate", widgets)
+        self._set_busy(True)
+        self._run_task.start(
+            "lr3-run",
+            lambda: self._run_method(
+                method=method,
+                expression=self.expression_input.text().strip(),
+                x1_raw=self.start_x1_input.text(),
+                x2_raw=self.start_x2_input.text(),
+                epsilon_raw=self.epsilon_input.text(),
+                max_iterations_raw=self.max_iterations_input.text(),
+                initial_step_raw=self.initial_step_input.text(),
+                timeout_raw=self.timeout_input.text(),
+                min_step_raw=self.min_step_input.text(),
+                gradient_step_raw=self.gradient_step_input.text(),
+                max_step_expansions_raw=self.max_step_expansions_input.text(),
+            ),
+        )
 
-    def _execute(self, method: str, widgets: dict[str, object]) -> None:
-        try:
-            expression = self._entry(widgets, "expression").get().strip()
-            start_point = build_start_point(
-                self._entry(widgets, "x1").get(),
-                self._entry(widgets, "x2").get(),
-            )
-            config = build_config(
-                epsilon_raw=self._entry(widgets, "epsilon").get(),
-                max_iterations_raw=self._entry(widgets, "iterations").get(),
-                initial_step_raw=self._entry(widgets, "step").get(),
-                timeout_raw=self._entry(widgets, "timeout").get(),
-            )
-
-            if method == "gradient":
-                result, metrics = run_gradient(expression, start_point, config)
-            else:
-                result, metrics = run_conjugate(expression, start_point, config)
-
-            self._render_output(widgets, expression, result, metrics.trace_id, metrics.latency_ms)
-            self._render_plot(widgets, expression, result)
-        except Exception as exc:
-            messagebox.showerror("Ошибка", str(exc))
-
-    def _render_output(
+    def _run_method(
         self,
-        widgets: dict[str, object],
+        *,
+        method: str,
         expression: str,
-        result: OptimizationResult,
-        trace_id: str,
-        latency_ms: float,
-    ) -> None:
-        output = self._output(widgets)
-        output.delete("1.0", tk.END)
+        x1_raw: str,
+        x2_raw: str,
+        epsilon_raw: str,
+        max_iterations_raw: str,
+        initial_step_raw: str,
+        timeout_raw: str,
+        min_step_raw: str,
+        gradient_step_raw: str,
+        max_step_expansions_raw: str,
+    ) -> RunPayload:
+        if not expression:
+            raise ValueError("Поле функции не должно быть пустым")
 
-        lines = [
-            f"Метод: {result.method_name}",
-            f"Trace ID: {trace_id}",
-            f"Функция: F(x1, x2) = {expression}",
-            f"Старт: ({result.start_point[0]:.6f}, {result.start_point[1]:.6f})",
-            f"Точка: ({result.optimum_point[0]:.8f}, {result.optimum_point[1]:.8f})",
-            f"Значение: {result.optimum_value:.8f}",
-            f"Итераций: {result.iterations_count}",
-            f"Успех: {result.success}",
-            f"Причина остановки: {result.stop_reason}",
-            f"Время: {latency_ms:.2f} ms",
-            "",
-            f"{'k':>4} | {'x1':>12} | {'x2':>12} | {'F(x)':>12} | {'||grad||':>12} | {'step':>10}",
-            "-" * 82,
+        start_point = build_start_point(x1_raw, x2_raw)
+        config = build_config(
+            epsilon_raw=epsilon_raw,
+            max_iterations_raw=max_iterations_raw,
+            initial_step_raw=initial_step_raw,
+            timeout_raw=timeout_raw,
+            min_step_raw=min_step_raw,
+            gradient_step_raw=gradient_step_raw,
+            max_step_expansions_raw=max_step_expansions_raw,
+        )
+
+        if method == "gradient":
+            result, metrics = run_gradient(expression=expression, start_point=start_point, config=config)
+        elif method == "conjugate":
+            result, metrics = run_conjugate(expression=expression, start_point=start_point, config=config)
+        else:
+            raise ValueError(f"Неизвестный метод: {method}")
+
+        return RunPayload(expression=expression, result=result, metrics=metrics)
+
+    def _on_run_succeeded(self, payload: object) -> None:
+        self._set_busy(False)
+        if not isinstance(payload, RunPayload):
+            QMessageBox.critical(self, "Ошибка расчета", "Некорректный формат ответа вычислений.")
+            return
+
+        self._last_payload = payload
+        self._render_summary(payload)
+        self._render_iterations(payload.result)
+        self._render_plot(payload)
+        self._set_results_empty_state(False)
+
+    def _on_run_failed(self, message: str, _stack: str) -> None:
+        self._set_busy(False)
+        QMessageBox.critical(self, "Ошибка расчета", message)
+
+    def _render_summary(self, payload: RunPayload) -> None:
+        result = payload.result
+        rows = [
+            result.method_name,
+            payload.metrics.trace_id,
+            f"({result.start_point[0]:.6f}; {result.start_point[1]:.6f})",
+            f"({result.optimum_point[0]:.8f}; {result.optimum_point[1]:.8f})",
+            f"{result.optimum_value:.8f}",
+            str(result.iterations_count),
+            "да" if result.success else "нет",
+            result.stop_reason,
         ]
 
-        for record in result.records:
-            grad_norm = (record.gradient[0] ** 2 + record.gradient[1] ** 2) ** 0.5
-            lines.append(
-                f"{record.k:>4} | {record.point[0]:>12.6f} | {record.point[1]:>12.6f} | "
-                f"{record.value:>12.6f} | {grad_norm:>12.4e} | {record.step_size:>10.6f}"
+        self.summary_table.setRowCount(1)
+        for column, value in enumerate(rows):
+            item = QTableWidgetItem(value)
+            item.setTextAlignment(Qt.AlignCenter)
+            self.summary_table.setItem(0, column, item)
+        self._set_summary_table_data_layout()
+
+    def _render_iterations(self, result: OptimizationResult) -> None:
+        records = result.records
+        self.steps_table.setRowCount(len(records))
+
+        for row, record in enumerate(records):
+            grad_norm = math.hypot(record.gradient[0], record.gradient[1])
+            values = (
+                str(record.k),
+                f"{record.point[0]:.8f}",
+                f"{record.point[1]:.8f}",
+                f"{record.value:.8f}",
+                f"{grad_norm:.4e}",
+                f"{record.step_size:.8f}",
             )
+            for column, value in enumerate(values):
+                item = QTableWidgetItem(value)
+                item.setTextAlignment(Qt.AlignCenter)
+                self.steps_table.setItem(row, column, item)
 
-        output.insert(tk.END, "\n".join(lines))
+        self._set_steps_table_data_layout()
 
-    def _render_plot(self, widgets: dict[str, object], expression: str, result: OptimizationResult) -> None:
-        objective = compile_objective(expression)
+    def _render_plot(self, payload: RunPayload) -> None:
+        objective = compile_objective(payload.expression)
+        result = payload.result
 
-        figure = self._figure(widgets)
-        figure.clear()
+        with dark_plot_context():
+            figure = self.canvas.figure
+            figure.clear()
+            figure.patch.set_facecolor("#171b24")
 
-        ax_contour = figure.add_subplot(121)
-        ax_conv = figure.add_subplot(122)
+            ax_contour = figure.add_subplot(121)
+            ax_convergence = figure.add_subplot(122)
 
-        xs = [record.point[0] for record in result.records] or [result.start_point[0], result.optimum_point[0]]
-        ys = [record.point[1] for record in result.records] or [result.start_point[1], result.optimum_point[1]]
+            xs = [item.point[0] for item in result.records]
+            ys = [item.point[1] for item in result.records]
+            if not xs:
+                xs = [result.start_point[0], result.optimum_point[0]]
+                ys = [result.start_point[1], result.optimum_point[1]]
 
-        margin = 1.0
-        x_min = min(xs) - margin
-        x_max = max(xs) + margin
-        y_min = min(ys) - margin
-        y_max = max(ys) + margin
+            margin = 1.0
+            x_min = min(xs) - margin
+            x_max = max(xs) + margin
+            y_min = min(ys) - margin
+            y_max = max(ys) + margin
 
-        grid_x = np.linspace(x_min, x_max, 80)
-        grid_y = np.linspace(y_min, y_max, 80)
-        x_mesh, y_mesh = np.meshgrid(grid_x, grid_y)
-        z_mesh = np.zeros_like(x_mesh)
+            grid_x = np.linspace(x_min, x_max, 80)
+            grid_y = np.linspace(y_min, y_max, 80)
+            x_mesh, y_mesh = np.meshgrid(grid_x, grid_y)
+            z_mesh = np.zeros_like(x_mesh)
 
-        for i in range(x_mesh.shape[0]):
-            for j in range(x_mesh.shape[1]):
-                z_mesh[i, j] = objective((float(x_mesh[i, j]), float(y_mesh[i, j])))
+            for i in range(x_mesh.shape[0]):
+                for j in range(x_mesh.shape[1]):
+                    z_mesh[i, j] = objective((float(x_mesh[i, j]), float(y_mesh[i, j])))
 
-        contour = ax_contour.contourf(x_mesh, y_mesh, z_mesh, levels=25, cmap="viridis")
-        figure.colorbar(contour, ax=ax_contour)
-        ax_contour.plot(xs, ys, "r.-", linewidth=2, markersize=6)
-        ax_contour.scatter([xs[0]], [ys[0]], c="white", edgecolors="black", label="start")
-        ax_contour.scatter([result.optimum_point[0]], [result.optimum_point[1]], c="red", label="optimum")
-        ax_contour.set_title("Траектория на линии уровня")
-        ax_contour.set_xlabel("x1")
-        ax_contour.set_ylabel("x2")
-        ax_contour.legend()
+            contour = ax_contour.contourf(x_mesh, y_mesh, z_mesh, levels=25, cmap="viridis")
+            figure.colorbar(contour, ax=ax_contour)
+            ax_contour.plot(xs, ys, "r.-", linewidth=2, markersize=6)
+            ax_contour.scatter([xs[0]], [ys[0]], c="white", edgecolors="black", label="start")
+            ax_contour.scatter([result.optimum_point[0]], [result.optimum_point[1]], c="red", label="optimum")
+            ax_contour.set_title("Траектория на линии уровня")
+            ax_contour.set_xlabel("x1")
+            ax_contour.set_ylabel("x2")
+            ax_contour.legend()
 
-        values = [record.value for record in result.records]
-        if not values:
-            values = [result.optimum_value]
-        ax_conv.plot(range(len(values)), values, "b-o", linewidth=2, markersize=4)
-        ax_conv.set_title("Сходимость")
-        ax_conv.set_xlabel("k")
-        ax_conv.set_ylabel("F(x)")
-        ax_conv.grid(True, alpha=0.3)
+            values = [record.value for record in result.records]
+            if not values:
+                values = [result.optimum_value]
+            ax_convergence.plot(range(len(values)), values, "b-o", linewidth=2, markersize=4)
+            ax_convergence.set_title("Сходимость")
+            ax_convergence.set_xlabel("k")
+            ax_convergence.set_ylabel("F(x)")
+            ax_convergence.grid(True, alpha=0.3)
 
-        figure.tight_layout()
-        self._canvas(widgets).draw()
+            figure.tight_layout()
+            self.canvas.draw()
 
-    @staticmethod
-    def _entry(widgets: dict[str, object], key: str) -> ttk.Entry:
-        return widgets[key]  # type: ignore[return-value]
+    def _clear_plot(self) -> None:
+        clear_plot_canvas(
+            self.canvas,
+            message="График появится после запуска расчета",
+        )
 
-    @staticmethod
-    def _output(widgets: dict[str, object]) -> scrolledtext.ScrolledText:
-        return widgets["output"]  # type: ignore[return-value]
+    def _selected_method(self) -> str | None:
+        for method, button in self.method_buttons.items():
+            if button.isChecked():
+                return method
+        return None
 
-    @staticmethod
-    def _figure(widgets: dict[str, object]) -> plt.Figure:
-        return widgets["figure"]  # type: ignore[return-value]
+    def _set_summary_table_empty_layout(self) -> None:
+        set_table_empty_layout(self.summary_table)
 
-    @staticmethod
-    def _canvas(widgets: dict[str, object]) -> FigureCanvasTkAgg:
-        return widgets["canvas"]  # type: ignore[return-value]
+    def _set_summary_table_data_layout(self) -> None:
+        set_table_data_layout(self.summary_table, [150, 110, 170, 170, 120, 58, 84, 180])
+
+    def _set_steps_table_empty_layout(self) -> None:
+        set_table_empty_layout(self.steps_table)
+
+    def _set_steps_table_data_layout(self) -> None:
+        set_table_data_layout(self.steps_table, [60, 120, 120, 130, 110, 110])
+
+    def _set_results_empty_state(self, is_empty: bool) -> None:
+        stack = self.results_empty_stack
+        if stack is None:
+            raise RuntimeError("EmptyStateStack не инициализирован")
+        stack.set_empty(is_empty)
+
+    def _set_busy(self, busy: bool) -> None:
+        self.run_button.setDisabled(busy)
+        self.run_button.setText("Считаю..." if busy else "Рассчитать")
 
 
 def main() -> None:
-    root = tk.Tk()
-    Lr3Window(root)
-    root.mainloop()
+    app = QApplication.instance() or QApplication(sys.argv)
+    window = GradientMethodsWindow()
+    window.show()
+    app.exec()

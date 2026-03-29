@@ -15,29 +15,54 @@ import sys
 from typing import Dict, List, Optional
 
 from matplotlib.figure import Figure
+from optim_core.ui import (
+    BatchRunUiController,
+    BatchRunUiHooks,
+    ControlsPanel,
+    DarkQtThemeTokens,
+    DynamicSeriesInputRow,
+    ResultsPlotTabIndexes,
+    TaskController,
+    add_parameter_row,
+    build_choice_chip_styles,
+    build_dark_qt_base_styles,
+    build_dynamic_series_styles,
+    configure_two_panel_splitter,
+    create_choice_chip_grid,
+    create_controls_panel,
+    create_parameter_grid,
+    create_primary_action_button,
+    create_results_workspace,
+    create_scroll_container,
+    create_standard_group,
+)
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QAbstractButton,
     QApplication,
     QButtonGroup,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QLineEdit,
     QMainWindow,
     QMessageBox,
-    QPushButton,
-    QRadioButton,
-    QScrollArea,
     QSizePolicy,
     QSplitter,
     QStackedWidget,
-    QTabWidget,
+    QTableWidget,
+    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
 
-from lr1.application.services import build_input_config, run_full_grid, run_single
+from lr1.application.services import (
+    build_input_config,
+    parse_positive_series,
+    run_batch,
+)
 from lr1.domain.functions import FUNCTION_TEMPLATE_SPECS
 from lr1.domain.models import AppState, GridRunResult, InputConfig, RunReport
 from lr1.domain.search import METHOD_SPECS
@@ -45,13 +70,14 @@ from lr1.infrastructure.logging import configure_logging, get_log_file_path
 from lr1.infrastructure.settings import DEFAULT_INPUT_EPS, DEFAULT_INTERVAL, DEFAULT_L
 from lr1.ui.plotting import build_grid_plot_figure, build_plot_figure
 from lr1.ui.tabs import IterationsTab, PlotTab, SummaryTab
-from lr1.ui.workers import TaskController
-
 
 configure_logging()
 logger = logging.getLogger("lr1.gui")
 
-APP_TITLE = "Исследование методов поиска экстремумов"
+APP_TITLE = "ЛР1 — Методы одномерной оптимизации"
+CONTROL_BUTTON_SIZE = 44
+SERIES_INPUT_WIDTH = 96
+ROW_CONTROL_SPACING = 4
 
 
 class ExtremumWindow(QMainWindow):
@@ -63,8 +89,21 @@ class ExtremumWindow(QMainWindow):
         self.state = AppState()
         self.current_plot_version = 0
         self.control_widgets: List[QWidget] = []
-        self.coefficient_inputs: Dict[str, Dict[str, QLineEdit]] = {}
+        self.coefficient_tables: Dict[str, QTableWidget] = {}
+        self.coefficient_keys: Dict[str, tuple[str, ...]] = {}
         self.function_stack_indexes: Dict[str, int] = {}
+        self.tab_indexes = ResultsPlotTabIndexes(results=0, plot=1)
+        self.epsilon_row: DynamicSeriesInputRow | None = None
+        self.l_row: DynamicSeriesInputRow | None = None
+        self._run_flow = BatchRunUiController[RunReport](
+            BatchRunUiHooks(
+                assign_report=self._assign_report_state,
+                reset_selection=self._reset_report_selection,
+                render_overview=self._render_report_overview,
+                select_first=self._select_first_after_run,
+                clear_details=self._clear_report_details,
+            )
+        )
 
         self.calc_task = TaskController(self)
         self.calc_task.succeeded.connect(self._apply_report)
@@ -83,72 +122,47 @@ class ExtremumWindow(QMainWindow):
     def _apply_styles(self) -> None:
         """Подключает единую таблицу стилей для всего интерфейса."""
         self.setStyleSheet(
-            """
-            QMainWindow, QWidget {
-                background: #1e1f24;
-                color: #f0f2f5;
-                font-family: "Helvetica Neue", "Arial", sans-serif;
-                font-size: 15px;
-            }
-            QLabel {
-                background: transparent;
-            }
-            QGroupBox {
-                border: 1px solid #4b4f5c;
-                border-radius: 10px;
-                margin-top: 12px;
-                padding: 12px;
-                font-weight: 600;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                left: 10px;
-                padding: 0 6px;
-                color: #d8dbe2;
-            }
-            QPushButton {
-                background: #3c4358;
-                border: 1px solid #59627d;
-                border-radius: 8px;
-                padding: 9px 14px;
-                color: #f5f7fb;
-                font-weight: 600;
-                min-height: 22px;
-            }
-            QPushButton:hover {
-                background: #4a5470;
-            }
-            QPushButton:pressed {
-                background: #31384a;
-            }
-            QPushButton:disabled {
-                background: #2c2f39;
-                color: #8f95a3;
-                border-color: #3a3e49;
-            }
-            QPushButton[variant="primary"] {
-                background: #1f6feb;
-                border-color: #2f81f7;
-            }
-            QPushButton[variant="primary"]:hover {
-                background: #2f81f7;
-            }
-            QPushButton[variant="primary"]:pressed {
-                background: #1858ba;
-            }
+            build_dark_qt_base_styles(
+                DarkQtThemeTokens(
+                    background="#1b1f2a",
+                    text="#f0f2f5",
+                    font_family='"Segoe UI", "Helvetica Neue", "Arial", sans-serif',
+                    group_border="#3f4a62",
+                    group_radius_px=12,
+                    group_padding_px=13,
+                    group_title_color="#dde5f3",
+                    button_bg="#2b3447",
+                    button_border="#4b5873",
+                    button_hover_bg="#36415a",
+                    button_pressed_bg="#242d3d",
+                    button_disabled_bg="#1f2533",
+                    button_disabled_text="#66738d",
+                    button_disabled_border="#3c465f",
+                    primary_bg="#0f7aff",
+                    primary_border="#3b94ff",
+                    primary_hover_bg="#2588ff",
+                    primary_pressed_bg="#0d66d8",
+                    tab_bg="#2c303b",
+                    tab_border="#4b4f5c",
+                    tab_selected_bg="#46516b",
+                    tab_selected_border="#647596",
+                )
+            )
+            + """
             QPushButton[role="action"] {
                 padding: 8px 16px;
                 min-height: 22px;
                 font-size: 15px;
             }
             QLineEdit, QListWidget {
-                background: #14161b;
-                border: 1px solid #464b59;
+                background: #131824;
+                border: 1px solid #3f4a62;
                 border-radius: 8px;
                 padding: 7px 10px;
                 color: #f5f7fb;
-                selection-background-color: #2a6df4;
+                selection-background-color: #2379ff;
             }
+            QLineEdit:focus { border: 1px solid #2f8fff; }
             QListWidget#GridRunList {
                 background: transparent;
                 border: 0;
@@ -255,39 +269,15 @@ class ExtremumWindow(QMainWindow):
                 padding: 8px 10px;
                 font-weight: 600;
             }
-            QTabWidget::pane {
-                border: 0;
-                top: 0;
-            }
-            QTabWidget::tab-bar {
-                alignment: left;
-            }
-            QTabBar {
-                qproperty-drawBase: 0;
-                qproperty-expanding: 1;
-            }
-            QTabBar::tab {
-                background: #2c303b;
-                border: 1px solid #4b4f5c;
-                padding: 8px 16px 10px 16px;
-                margin-right: 6px;
-                margin-bottom: 2px;
-                border-top-left-radius: 10px;
-                border-top-right-radius: 10px;
-                min-width: 0px;
-                min-height: 24px;
-                font-size: 14px;
-                font-weight: 600;
-            }
-            QTabBar::tab:selected {
-                background: #46516b;
-                border-color: #647596;
-                color: #ffffff;
-            }
             QLabel#SectionHint {
                 color: #c8cfdb;
                 font-size: 14px;
                 padding: 4px 2px;
+            }
+            QLabel[role="parameter-label"] {
+                color: #dce6f5;
+                font-size: 15px;
+                font-weight: 600;
             }
             QWidget#FinalResultCard {
                 background: #181b24;
@@ -338,9 +328,6 @@ class ExtremumWindow(QMainWindow):
                 border: 1px solid #31384a;
                 border-radius: 12px;
             }
-            QWidget#CoeffCell {
-                background: transparent;
-            }
             QLabel#FunctionFormulaLabel {
                 color: #eef2f8;
                 font-size: 20px;
@@ -351,18 +338,9 @@ class ExtremumWindow(QMainWindow):
                 font-size: 13px;
                 font-weight: 700;
             }
-            QLineEdit[role="coefficient"] {
-                font-size: 15px;
-                font-weight: 600;
-                padding: 8px 10px;
-            }
-            QRadioButton {
-                spacing: 7px;
-                padding: 2px 0;
-                min-height: 22px;
-                font-size: 15px;
-            }
             """
+            + build_choice_chip_styles()
+            + build_dynamic_series_styles()
         )
 
     def _build_ui(self) -> None:
@@ -374,20 +352,11 @@ class ExtremumWindow(QMainWindow):
         root_layout.setSpacing(12)
 
         splitter = QSplitter(Qt.Horizontal)
-        splitter.setChildrenCollapsible(False)
         root_layout.addWidget(splitter)
 
-        left_scroll = QScrollArea()
-        left_scroll.setWidgetResizable(True)
-        left_scroll.setFrameShape(QScrollArea.NoFrame)
-        left_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-
-        left_panel = QWidget()
-        left_panel.setMinimumWidth(500)
-        left_panel.setMaximumWidth(560)
-        left_layout = QVBoxLayout(left_panel)
-        left_layout.setContentsMargins(0, 0, 0, 0)
-        left_layout.setSpacing(12)
+        controls: ControlsPanel = create_controls_panel(min_width=500, max_width=560, spacing=12)
+        left_panel = controls.panel
+        left_layout = controls.layout
 
         self._build_function_box(left_layout)
         self._build_scenario_box(left_layout)
@@ -395,56 +364,61 @@ class ExtremumWindow(QMainWindow):
         self._build_actions_box(left_layout)
 
         left_layout.addStretch(1)
-        left_scroll.setWidget(left_panel)
+        left_scroll = create_scroll_container(
+            left_panel,
+            widget_resizable=True,
+            horizontal_policy=Qt.ScrollBarAlwaysOff,
+        )
 
-        right_panel = QWidget()
-        right_layout = QVBoxLayout(right_panel)
-        right_layout.setContentsMargins(0, 0, 0, 0)
-        right_layout.setSpacing(12)
-
-        self.tabs = QTabWidget()
-        self.tabs.setDocumentMode(True)
-        self.tabs.tabBar().setExpanding(True)
-        self.tabs.tabBar().setUsesScrollButtons(False)
-        right_layout.addWidget(self.tabs)
+        workspace = create_results_workspace(
+            results_title="Таблицы",
+            plot_title="Графики",
+            with_tables_empty_state=True,
+            tables_empty_title="Пока нет результатов",
+            tables_empty_description=(
+                "Слева выбери функцию, диапазон и метод.\n"
+                "После запуска здесь появятся результаты и сравнение методов."
+            ),
+            tables_empty_hint="Нажми «Рассчитать», чтобы получить таблицы и графики.",
+        )
+        self.tabs = workspace.tabs
+        self.results_tab_stack = workspace.tables_empty_stack
+        if self.results_tab_stack is None:
+            raise RuntimeError("Ожидался EmptyStateStack для вкладки таблиц")
 
         self.summary_tab = SummaryTab()
         self.iterations_tab = IterationsTab(self.on_grid_run_change, self.on_table_method_change)
         self.plot_tab = PlotTab()
-        self.tabs.addTab(self.summary_tab, "Сводка")
-        self.tabs.addTab(self.iterations_tab, "Итерации")
-        self.tabs.addTab(self.plot_tab, "График")
+
+        workspace.tables_layout.addWidget(self.summary_tab)
+        workspace.tables_layout.addWidget(self.iterations_tab)
+        workspace.plots_layout.addWidget(self.plot_tab)
+        self.tab_indexes = workspace.tab_indexes
         self.tabs.currentChanged.connect(self.on_tab_changed)
 
-        splitter.addWidget(left_scroll)
-        splitter.addWidget(right_panel)
-        splitter.setStretchFactor(0, 0)
-        splitter.setStretchFactor(1, 1)
-        splitter.setSizes([540, 960])
+        configure_two_panel_splitter(
+            splitter,
+            left=left_scroll,
+            right=workspace.panel,
+            left_size=540,
+            right_size=960,
+        )
 
     def _build_function_box(self, layout: QVBoxLayout) -> None:
         """Строит секцию выбора типа функции и редактирования коэффициентов."""
-        box = QGroupBox("Функция")
-        box.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
-        box_layout = QVBoxLayout(box)
-        box_layout.setContentsMargins(16, 16, 16, 14)
-        box_layout.setSpacing(8)
-
-        selector_holder = QWidget()
-        selector_layout = QHBoxLayout(selector_holder)
-        selector_layout.setContentsMargins(0, 0, 0, 0)
-        selector_layout.setSpacing(16)
+        box, box_layout = create_standard_group("Функция")
 
         self.function_group = QButtonGroup(self)
-        self.function_buttons = []
-        for caption, value in (("Квадратичная", "quadratic"), ("Рациональная", "rational")):
-            button = QRadioButton(caption)
-            button.setProperty("choice_value", value)
+        self.function_group.setExclusive(True)
+        selector_holder, self.function_buttons = create_choice_chip_grid(
+            group=self.function_group,
+            options=(("Квадратичная", "quadratic"), ("Рациональная", "rational")),
+            columns=2,
+            horizontal_spacing=6,
+            vertical_spacing=6,
+        )
+        for button in self.function_buttons:
             button.toggled.connect(self.on_function_change)
-            self.function_group.addButton(button)
-            selector_layout.addWidget(button)
-            self.function_buttons.append(button)
-        selector_layout.addStretch(1)
         box_layout.addWidget(selector_holder)
 
         self._build_function_editors(box_layout)
@@ -456,9 +430,9 @@ class ExtremumWindow(QMainWindow):
         box.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
         grid = QGridLayout(box)
         grid.setContentsMargins(16, 16, 16, 14)
-        grid.setHorizontalSpacing(12)
+        grid.setHorizontalSpacing(10)
         grid.setVerticalSpacing(8)
-        grid.setColumnMinimumWidth(0, 100)
+        grid.setColumnStretch(0, 1)
         grid.setColumnStretch(1, 1)
 
         self.kind_group = QButtonGroup(self)
@@ -488,69 +462,26 @@ class ExtremumWindow(QMainWindow):
 
     def _build_parameters_box(self, layout: QVBoxLayout) -> None:
         """Строит блок ручного ввода интервала, `ε` и `l`."""
-        box = QGroupBox("Параметры")
+        box = QGroupBox("Параметры расчетов")
         box.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
-        grid = QGridLayout(box)
-        grid.setContentsMargins(16, 16, 16, 14)
-        grid.setHorizontalSpacing(10)
-        grid.setVerticalSpacing(8)
-        grid.setColumnMinimumWidth(0, 150)
-        grid.setColumnStretch(1, 0)
-        grid.setColumnStretch(2, 1)
+        grid = create_parameter_grid(box, vertical_spacing=6)
 
-        self.a_input, self.b_input = self._add_interval_inputs(grid, 0, "Границы")
-        self.eps_input = self._add_labeled_input(grid, 1, "Точность ε")
-        self.l_input = self._add_labeled_input(grid, 2, "Длина интервала L")
+        self.a_input, self.b_input = self._add_interval_inputs(grid, row=0)
+        self._add_series_inputs(grid, row=1, label="Точности ε", target="eps")
+        self._add_series_inputs(grid, row=2, label="Длины интервала L", target="l")
 
         layout.addWidget(box)
 
     def _build_actions_box(self, layout: QVBoxLayout) -> None:
-        """Строит блок кнопок запуска, серии расчётов и очистки результата."""
-        box = QGroupBox("Запуск")
-        box.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
-        box_layout = QVBoxLayout(box)
-        box_layout.setContentsMargins(16, 16, 16, 16)
-        box_layout.setSpacing(10)
-
-        self.run_button = QPushButton("Рассчитать")
-        self.run_button.clicked.connect(self.handle_run_single)
-        self.run_button.setProperty("variant", "primary")
-        self.run_button.setProperty("role", "action")
-        self.run_button.setMinimumHeight(38)
-        box_layout.addWidget(self.run_button)
-
-        self.grid_button = QPushButton("Серия расчётов")
-        self.grid_button.clicked.connect(self.handle_run_full_grid)
-        self.grid_button.setProperty("role", "action")
-        self.grid_button.setMinimumHeight(38)
-        box_layout.addWidget(self.grid_button)
-
-        self.actions_hint_label = QLabel(
-            "Серия расчётов автоматически прогоняет несколько сочетаний ε и l\n"
-            "и показывает, как меняется результат у разных методов."
-        )
-        self.actions_hint_label.setObjectName("SectionHint")
-        self.actions_hint_label.setWordWrap(True)
-        box_layout.addWidget(self.actions_hint_label)
-
-        self.clear_button = QPushButton("Очистить")
-        self.clear_button.clicked.connect(self.clear_output)
-        self.clear_button.setProperty("role", "action")
-        self.clear_button.setMinimumHeight(38)
-        box_layout.addWidget(self.clear_button)
-
-        layout.addWidget(box)
+        """Строит блок запуска расчёта."""
+        self.run_button = create_primary_action_button(text="Рассчитать", on_click=self.handle_run)
+        layout.addWidget(self.run_button)
 
         self.control_widgets.extend(
             [
                 self.a_input,
                 self.b_input,
-                self.eps_input,
-                self.l_input,
                 self.run_button,
-                self.grid_button,
-                self.actions_hint_label,
-                self.clear_button,
                 *self.function_buttons,
                 *self.kind_buttons,
                 *self.method_buttons,
@@ -565,30 +496,21 @@ class ExtremumWindow(QMainWindow):
         group: QButtonGroup,
         options,
         columns: int,
-    ) -> List[QRadioButton]:
+    ) -> List[QAbstractButton]:
         """Создаёт сетку радиокнопок и возвращает список созданных элементов."""
+        base_row = row * 2
         label_widget = QLabel(label)
-        label_widget.setMinimumWidth(112)
-        label_widget.setAlignment(Qt.AlignLeft | Qt.AlignTop)
-        grid.addWidget(label_widget, row, 0, Qt.AlignTop)
-        holder = QWidget()
-        option_width = 250
-        holder_layout = QGridLayout(holder)
-        holder_layout.setContentsMargins(0, 0, 0, 0)
-        holder_layout.setHorizontalSpacing(28)
-        holder_layout.setVerticalSpacing(8)
-        holder_layout.setAlignment(Qt.AlignLeft | Qt.AlignTop)
-        buttons: List[QRadioButton] = []
-        for index, (caption, value) in enumerate(options):
-            button = QRadioButton(caption)
-            button.setProperty("choice_value", value)
-            group.addButton(button)
-            button.setFixedWidth(option_width)
-            holder_layout.addWidget(button, index // columns, index % columns)
-            buttons.append(button)
-        for column in range(columns):
-            holder_layout.setColumnMinimumWidth(column, option_width)
-        grid.addWidget(holder, row, 1, 1, 3)
+        label_widget.setProperty("role", "parameter-label")
+        label_widget.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        grid.addWidget(label_widget, base_row, 0, 1, columns, Qt.AlignLeft | Qt.AlignVCenter)
+        holder, buttons = create_choice_chip_grid(
+            group=group,
+            options=options,
+            columns=columns,
+            horizontal_spacing=10,
+            vertical_spacing=8,
+        )
+        grid.addWidget(holder, base_row + 1, 0, 1, columns)
         return buttons
 
     def _build_function_editors(self, layout: QVBoxLayout) -> None:
@@ -632,55 +554,37 @@ class ExtremumWindow(QMainWindow):
             coeff_caption.setObjectName("SectionCaption")
             coeff_card_layout.addWidget(coeff_caption)
 
-            coeff_grid = QGridLayout()
-            coeff_grid.setContentsMargins(0, 0, 0, 0)
-            coeff_grid.setHorizontalSpacing(10)
-            coeff_grid.setVerticalSpacing(10)
-            coeff_grid.setAlignment(Qt.AlignHCenter | Qt.AlignTop)
-            self.coefficient_inputs[template.key] = {}
+            coeff_table = QTableWidget(1, len(template.coefficients))
+            coeff_table.setAlternatingRowColors(True)
+            coeff_table.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+            coeff_table.horizontalHeader().setDefaultAlignment(Qt.AlignCenter)
+            coeff_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+            coeff_table.horizontalHeader().setMinimumSectionSize(72)
+            coeff_table.horizontalHeader().setFixedHeight(34)
+            coeff_table.verticalHeader().setVisible(False)
+            coeff_table.verticalHeader().setDefaultSectionSize(42)
+            coeff_table.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+            coeff_table.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            coeff_table.setFixedHeight(94)
+            coeff_table.setProperty("variant", "report")
+            coeff_table.setHorizontalHeaderLabels([item.label for item in template.coefficients])
 
-            for coeff_index, coefficient in enumerate(template.coefficients):
-                col = coeff_index % 3
-                row_base = coeff_index // 3
-                cell = QWidget()
-                cell.setObjectName("CoeffCell")
-                cell.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-                cell_layout = QVBoxLayout(cell)
-                cell_layout.setContentsMargins(0, 0, 0, 0)
-                cell_layout.setSpacing(4)
+            self.coefficient_tables[template.key] = coeff_table
+            self.coefficient_keys[template.key] = tuple(item.key for item in template.coefficients)
+            self.control_widgets.append(coeff_table)
 
-                coeff_label = QLabel(coefficient.label)
-                coeff_label.setObjectName("CoeffCaption")
-                coeff_label.setAlignment(Qt.AlignCenter)
-                coeff_input = QLineEdit()
-                coeff_input.setProperty("role", "coefficient")
-                coeff_input.setMinimumWidth(88)
-                coeff_input.setMaximumWidth(108)
-                coeff_input.setMinimumHeight(36)
-                coeff_input.setAlignment(Qt.AlignCenter)
-                coeff_input.setText(f"{coefficient.default:g}")
-                cell_layout.addWidget(coeff_label)
-                cell_layout.addWidget(coeff_input)
-                coeff_grid.addWidget(cell, row_base, col)
-                self.coefficient_inputs[template.key][coefficient.key] = coeff_input
-                self.control_widgets.append(coeff_input)
+            for column, coefficient in enumerate(template.coefficients):
+                item = QTableWidgetItem(f"{coefficient.default:g}")
+                item.setTextAlignment(Qt.AlignCenter)
+                coeff_table.setItem(0, column, item)
 
-            coeff_row = QHBoxLayout()
-            coeff_row.addStretch(1)
-            coeff_row.addLayout(coeff_grid)
-            coeff_row.addStretch(1)
-            coeff_card_layout.addLayout(coeff_row)
+            coeff_card_layout.addWidget(coeff_table)
             page_layout.addWidget(coeff_card)
             self.function_editor_stack.addWidget(page)
             self.function_stack_indexes[template.key] = index
 
-    def _add_interval_inputs(self, grid: QGridLayout, row: int, label: str) -> tuple[QLineEdit, QLineEdit]:
+    def _add_interval_inputs(self, grid: QGridLayout, row: int) -> tuple[QLineEdit, QLineEdit]:
         """Добавляет в сетку пару полей для левой и правой границы интервала."""
-        label_widget = QLabel(label)
-        label_widget.setMinimumWidth(150)
-        label_widget.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-        grid.addWidget(label_widget, row, 0)
-
         holder = QWidget()
         layout = QHBoxLayout(holder)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -692,9 +596,10 @@ class ExtremumWindow(QMainWindow):
         layout.addWidget(left_caption)
 
         left_line = QLineEdit()
-        left_line.setMaximumWidth(120)
+        left_line.setMinimumWidth(170)
         left_line.setMinimumHeight(38)
-        layout.addWidget(left_line)
+        left_line.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        layout.addWidget(left_line, 1)
 
         right_caption = QLabel("b")
         right_caption.setObjectName("CoeffCaption")
@@ -702,34 +607,34 @@ class ExtremumWindow(QMainWindow):
         layout.addWidget(right_caption)
 
         right_line = QLineEdit()
-        right_line.setMaximumWidth(120)
+        right_line.setMinimumWidth(170)
         right_line.setMinimumHeight(38)
-        layout.addWidget(right_line)
-        layout.addStretch(1)
+        right_line.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        layout.addWidget(right_line, 1)
 
-        grid.addWidget(holder, row, 1, 1, 2)
+        add_parameter_row(grid, row=row, label="Границы", control=holder)
         return left_line, right_line
 
-    def _add_labeled_input(self, grid: QGridLayout, row: int, label: str) -> QLineEdit:
-        """Добавляет обычное подписанное поле ввода в таблицу параметров."""
-        label_widget = QLabel(label)
-        label_widget.setMinimumWidth(150)
-        label_widget.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-        label_widget.setWordWrap(True)
-        grid.addWidget(label_widget, row, 0)
+    def _add_series_inputs(self, grid: QGridLayout, row: int, label: str, target: str) -> None:
+        """Добавляет динамический ряд параметров с кнопками `+` и `−`."""
+        row_control = DynamicSeriesInputRow(
+            add_role="series-add",
+            remove_role="series-remove",
+            field_role="series-item",
+            placeholders=("ε",) if target == "eps" else ("L",),
+            field_widths=(SERIES_INPUT_WIDTH,),
+            control_button_size=CONTROL_BUTTON_SIZE,
+            row_control_spacing=ROW_CONTROL_SPACING,
+            on_control_added=self.control_widgets.append,
+            on_control_removed=self._remove_control_widget,
+        )
+        add_parameter_row(grid, row=row, label=label, control=row_control.row_widget)
+        row_control.add_item(DEFAULT_INPUT_EPS if target == "eps" else DEFAULT_L)
 
-        holder = QWidget()
-        layout = QHBoxLayout(holder)
-        layout.setContentsMargins(0, 0, 0, 0)
-
-        line = QLineEdit()
-        line.setFixedWidth(180)
-        line.setMinimumHeight(38)
-        layout.addWidget(line)
-        layout.addStretch(1)
-
-        grid.addWidget(holder, row, 1, 1, 2)
-        return line
+        if target == "eps":
+            self.epsilon_row = row_control
+        else:
+            self.l_row = row_control
 
     def _set_defaults(self) -> None:
         """Заполняет интерфейс начальными значениями по умолчанию."""
@@ -739,21 +644,28 @@ class ExtremumWindow(QMainWindow):
         self.method_buttons[0].setChecked(True)
         self.a_input.setText(DEFAULT_INTERVAL[0])
         self.b_input.setText(DEFAULT_INTERVAL[1])
-        self.eps_input.setText(DEFAULT_INPUT_EPS)
-        self.l_input.setText(DEFAULT_L)
+        if self.epsilon_row is not None:
+            self.epsilon_row.reset(((DEFAULT_INPUT_EPS,),))
+        if self.l_row is not None:
+            self.l_row.reset(((DEFAULT_L,),))
         self.on_function_change()
         self.summary_tab.populate(None)
 
     def _reset_function_defaults(self) -> None:
         """Возвращает коэффициенты всех шаблонов функций к исходным значениям."""
         for template in FUNCTION_TEMPLATE_SPECS.values():
-            editors = self.coefficient_inputs.get(template.key, {})
-            for coefficient in template.coefficients:
-                editor = editors.get(coefficient.key)
-                if editor is not None:
-                    editor.setText(f"{coefficient.default:g}")
+            table = self.coefficient_tables.get(template.key)
+            if table is None:
+                continue
+            for column, coefficient in enumerate(template.coefficients):
+                item = table.item(0, column)
+                if item is None:
+                    item = QTableWidgetItem()
+                    item.setTextAlignment(Qt.AlignCenter)
+                    table.setItem(0, column, item)
+                item.setText(f"{coefficient.default:g}")
 
-    def _selected_value(self, buttons: List[QRadioButton], default: str) -> str:
+    def _selected_value(self, buttons: List[QAbstractButton], default: str) -> str:
         """Возвращает `choice_value` выбранной радиокнопки или значение по умолчанию."""
         for button in buttons:
             if button.isChecked():
@@ -766,21 +678,44 @@ class ExtremumWindow(QMainWindow):
 
     def _collect_coefficient_raws(self, function_key: str) -> Dict[str, str]:
         """Собирает сырые строки коэффициентов из активного редактора."""
-        return {key: editor.text() for key, editor in self.coefficient_inputs.get(function_key, {}).items()}
+        table = self.coefficient_tables.get(function_key)
+        keys = self.coefficient_keys.get(function_key, ())
+        if table is None or not keys:
+            return {}
+        values: Dict[str, str] = {}
+        for column, key in enumerate(keys):
+            item = table.item(0, column)
+            values[key] = item.text().strip() if item is not None else ""
+        return values
 
-    def _collect_input_config(self) -> InputConfig:
-        """Читает все элементы управления и строит валидированный `InputConfig`."""
+    def _collect_run_request(self) -> tuple[InputConfig, tuple[float, ...], tuple[float, ...]]:
+        """Читает элементы управления и готовит полный запрос на пакетный запуск."""
         function_key = self._selected_function_key()
-        return build_input_config(
+        eps_values = parse_positive_series(self._collect_series_raw(self.epsilon_row, "Список ε пуст."), "ε")
+        l_values = parse_positive_series(self._collect_series_raw(self.l_row, "Список l пуст."), "l")
+        config = build_input_config(
             function_key=function_key,
             kind=self._selected_value(self.kind_buttons, "max"),
             method_key=self._selected_value(self.method_buttons, "all"),
             a_raw=self.a_input.text(),
             b_raw=self.b_input.text(),
-            eps_raw=self.eps_input.text(),
-            l_raw=self.l_input.text(),
+            eps_raw=str(eps_values[0]),
+            l_raw=str(l_values[0]),
             coefficient_raws=self._collect_coefficient_raws(function_key),
         )
+        return config, eps_values, l_values
+
+    def _collect_series_raw(self, row: DynamicSeriesInputRow | None, empty_message: str) -> str:
+        if row is None:
+            raise ValueError(empty_message)
+        values = [field_values[0] for field_values in row.rows() if field_values and field_values[0]]
+        if not values:
+            raise ValueError(empty_message)
+        return ",".join(values)
+
+    def _remove_control_widget(self, widget: QWidget) -> None:
+        if widget in self.control_widgets:
+            self.control_widgets.remove(widget)
 
     def _set_busy(self, busy: bool) -> None:
         """Переключает окно в занятое или свободное состояние."""
@@ -799,29 +734,20 @@ class ExtremumWindow(QMainWindow):
             if current_page is not None:
                 self.function_editor_stack.setFixedHeight(current_page.sizeHint().height())
 
-    def handle_run_single(self) -> None:
-        """Запускает обычный расчёт по текущим параметрам пользователя."""
-        logger.info("Single run requested")
+    def handle_run(self) -> None:
+        """Запускает расчёт по всем комбинациям введённых `ε × l`."""
+        logger.info("Run requested")
         try:
-            config = self._collect_input_config()
+            config, eps_values, l_values = self._collect_run_request()
         except ValueError as exc:
             QMessageBox.critical(self, "Ошибка", str(exc))
             return
 
         self._set_busy(True)
-        self.calc_task.start("Выполняется расчёт...", lambda: run_single(config))
-
-    def handle_run_full_grid(self) -> None:
-        """Запускает серию расчётов по конфигурационной сетке `ε × l`."""
-        logger.info("Grid run requested")
-        try:
-            config = self._collect_input_config()
-        except ValueError as exc:
-            QMessageBox.critical(self, "Ошибка", str(exc))
-            return
-
-        self._set_busy(True)
-        self.calc_task.start("Запускаю исследование ε × l...", lambda: run_full_grid(config))
+        self.calc_task.start(
+            "Выполняется расчёт...",
+            lambda: run_batch(config, eps_values=eps_values, l_values=l_values),
+        )
 
     def _handle_worker_error(self, message: str, stack: str) -> None:
         """Обрабатывает ошибку фоновой задачи и показывает её пользователю."""
@@ -838,20 +764,40 @@ class ExtremumWindow(QMainWindow):
 
         report = payload
         logger.info("Applying report methods=%s", report.method_keys)
+        self._run_flow.apply(report)
+        self._set_busy(False)
+
+        if self.tabs.currentIndex() == self.tab_indexes.plot:
+            self.render_last_plot()
+
+    def _assign_report_state(self, report: RunReport) -> None:
         self.state.last_report = report
+
+    def _reset_report_selection(self) -> None:
+        report = self.state.last_report
+        if report is None:
+            self.state.selected_table_method = ""
+            self.state.selected_grid_run_index = 0
+            return
         self.state.selected_table_method = report.default_method_key or ""
         self.state.selected_grid_run_index = 0
         self.current_plot_version += 1
 
+    def _render_report_overview(self, report: RunReport) -> None:
+        self.results_tab_stack.set_empty(False)
         self.summary_tab.populate(report)
         self.iterations_tab.rebuild_method_buttons(report, self.state.selected_table_method)
         self.iterations_tab.populate_grid_runs(report, self.state.selected_table_method, self.state.selected_grid_run_index)
         self._populate_iterations()
         self.plot_tab.show_placeholder("Открой вкладку «График» для автоматического построения.")
-        self._set_busy(False)
 
-        if self.tabs.currentIndex() == 2:
-            self.render_last_plot()
+    def _select_first_after_run(self, report: RunReport) -> bool:
+        return bool(report.method_keys)
+
+    def _clear_report_details(self) -> None:
+        self.results_tab_stack.set_empty(True)
+        self.iterations_tab.clear()
+        self.plot_tab.show_placeholder("График появится после расчёта.")
 
     def _selected_grid_run(self) -> Optional[GridRunResult]:
         """Возвращает текущий выбранный прогон из серии, если он существует."""
@@ -891,7 +837,7 @@ class ExtremumWindow(QMainWindow):
         self.state.selected_grid_run_index = 0
         self.iterations_tab.populate_grid_runs(report, self.state.selected_table_method, self.state.selected_grid_run_index)
         self._populate_iterations()
-        if self.tabs.currentIndex() == 2 and report.mode == "grid":
+        if self.tabs.currentIndex() == self.tab_indexes.plot and report.mode == "grid":
             self.render_last_plot()
 
     def on_grid_run_change(self, row: int) -> None:
@@ -900,7 +846,7 @@ class ExtremumWindow(QMainWindow):
             return
         self.state.selected_grid_run_index = row
         self._populate_iterations()
-        if self.tabs.currentIndex() == 2:
+        if self.tabs.currentIndex() == self.tab_indexes.plot:
             self.render_last_plot()
 
     def render_last_plot(self) -> None:
@@ -967,23 +913,10 @@ class ExtremumWindow(QMainWindow):
 
     def on_tab_changed(self, index: int) -> None:
         """Ленивая синхронизация вкладок при переключении пользователем."""
-        if index == 1:
+        if index == self.tab_indexes.results:
             self._populate_iterations()
-        elif index == 2 and self.state.last_report is not None:
+        elif index == self.tab_indexes.plot and self.state.last_report is not None:
             self.render_last_plot()
-
-    def clear_output(self) -> None:
-        """Сбрасывает правую часть окна и очищает последнее состояние расчёта."""
-        if self.state.busy:
-            return
-        logger.info("Clearing window state")
-        self.state.last_report = None
-        self.state.selected_table_method = ""
-        self.state.selected_grid_run_index = 0
-        self.summary_tab.populate(None)
-        self.iterations_tab.clear()
-        self.plot_tab.show_placeholder("График появится после расчёта.")
-
 
 def main() -> None:
     """Создаёт `QApplication`, окно и запускает цикл обработки событий Qt."""
