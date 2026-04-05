@@ -9,6 +9,7 @@ from pathlib import Path
 
 import numpy as np
 from matplotlib.figure import Figure
+from mpl_toolkits.mplot3d import Axes3D as _Axes3D  # noqa: F401  # регистрация 3d-проекции
 from optim_core.parsing import parse_localized_float
 from optim_core.ui import (
     BatchRunUiController,
@@ -472,7 +473,7 @@ class RosenbrockWindow(QMainWindow):
         mode_keys = ("contour", "surface")
         mode_row_widget, mode_buttons = create_choice_chip_grid(
             group=self.plot_mode_group,
-            options=(("Контуры 2D", "contour"), ("3D поверхность", "surface")),
+            options=(("Контуры 2D", "contour"), ("Поверхность 3D", "surface")),
             columns=len(mode_keys),
             horizontal_spacing=8,
             vertical_spacing=8,
@@ -492,7 +493,7 @@ class RosenbrockWindow(QMainWindow):
         self._sync_plot_mode_button_styles()
         return panel
 
-    def _on_preset_selected(self, preset_key: str, checked: bool) -> None:
+    def _on_preset_selected(self, preset_key: str, checked: bool = True) -> None:
         if not checked:
             return
         self._apply_preset(preset_key)
@@ -702,7 +703,7 @@ class RosenbrockWindow(QMainWindow):
             return
         self._select_run(selected_indexes[0].row(), sync_table_selection=False)
 
-    def _on_plot_mode_selected(self, mode_key: str, checked: bool) -> None:
+    def _on_plot_mode_selected(self, mode_key: str, checked: bool = True) -> None:
         if not checked:
             return
         self._plot_mode = mode_key
@@ -794,7 +795,7 @@ class RosenbrockWindow(QMainWindow):
             mode = self._plot_mode
             if mode == "surface":
                 ax_surface = self.canvas.figure.add_subplot(1, 1, 1, projection="3d")
-                z_clipped = np.clip(mesh_z, np.nanpercentile(mesh_z, 5), np.nanpercentile(mesh_z, 95))
+                z_clipped = self._build_surface_mesh(mesh_z)
                 ax_surface.plot_surface(
                     mesh_x,
                     mesh_y,
@@ -856,9 +857,10 @@ class RosenbrockWindow(QMainWindow):
                 ax_surface.set_xlabel("x1")
                 ax_surface.set_ylabel("x2")
                 ax_surface.set_zlabel("f(x1, x2)")
-                ax_surface.xaxis.pane.set_facecolor((0.12, 0.16, 0.23, 0.45))
-                ax_surface.yaxis.pane.set_facecolor((0.12, 0.16, 0.23, 0.45))
-                ax_surface.zaxis.pane.set_facecolor((0.12, 0.16, 0.23, 0.45))
+                for axis in (ax_surface.xaxis, ax_surface.yaxis, ax_surface.zaxis):
+                    pane = getattr(axis, "pane", None)
+                    if pane is not None:
+                        pane.set_facecolor((0.12, 0.16, 0.23, 0.45))
                 ax_surface.tick_params(colors="#c4cfdf")
                 ax_surface.view_init(elev=26, azim=-56)
             else:
@@ -990,7 +992,7 @@ class RosenbrockWindow(QMainWindow):
             figure.patch.set_facecolor("#171b24")
             if mode == "surface":
                 ax_surface = figure.add_subplot(1, 1, 1, projection="3d")
-                z_clipped = np.clip(mesh_z, np.nanpercentile(mesh_z, 5), np.nanpercentile(mesh_z, 95))
+                z_clipped = self._build_surface_mesh(mesh_z)
                 ax_surface.plot_surface(
                     mesh_x,
                     mesh_y,
@@ -1051,9 +1053,10 @@ class RosenbrockWindow(QMainWindow):
                 ax_surface.set_xlabel("x1")
                 ax_surface.set_ylabel("x2")
                 ax_surface.set_zlabel("f(x1, x2)")
-                ax_surface.xaxis.pane.set_facecolor((0.12, 0.16, 0.23, 0.45))
-                ax_surface.yaxis.pane.set_facecolor((0.12, 0.16, 0.23, 0.45))
-                ax_surface.zaxis.pane.set_facecolor((0.12, 0.16, 0.23, 0.45))
+                for axis in (ax_surface.xaxis, ax_surface.yaxis, ax_surface.zaxis):
+                    pane = getattr(axis, "pane", None)
+                    if pane is not None:
+                        pane.set_facecolor((0.12, 0.16, 0.23, 0.45))
                 ax_surface.tick_params(colors="#c4cfdf")
                 ax_surface.set_zlim(float(np.nanmin(z_clipped)), float(np.nanmax(z_clipped) + z_offset * 1.5))
                 ax_surface.view_init(elev=34, azim=-44)
@@ -1096,6 +1099,19 @@ class RosenbrockWindow(QMainWindow):
                     continue
                 result += coefficient * x_part * np.power(mesh_y, j)
         return result
+
+    @staticmethod
+    def _build_surface_mesh(mesh_z: np.ndarray) -> np.ndarray:
+        """Готовит численно устойчивую сетку для 3D-поверхности."""
+        finite_values = mesh_z[np.isfinite(mesh_z)]
+        if finite_values.size == 0:
+            return np.zeros_like(mesh_z, dtype=float)
+        low = float(np.percentile(finite_values, 5))
+        high = float(np.percentile(finite_values, 95))
+        if high < low:
+            low, high = high, low
+        clipped = np.clip(np.nan_to_num(mesh_z, nan=0.0, posinf=high, neginf=low), low, high)
+        return clipped
 
     def _clear_plot(self) -> None:
         clear_plot_canvas(
