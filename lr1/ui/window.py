@@ -27,6 +27,7 @@ from optim_core.ui import (
     build_choice_chip_styles,
     build_dark_qt_base_styles,
     build_dynamic_series_styles,
+    configure_data_table,
     configure_two_panel_splitter,
     create_choice_chip_grid,
     create_controls_panel,
@@ -568,6 +569,13 @@ class ExtremumWindow(QMainWindow):
             coeff_table.setFixedHeight(94)
             coeff_table.setProperty("variant", "report")
             coeff_table.setHorizontalHeaderLabels([item.label for item in template.coefficients])
+            configure_data_table(
+                coeff_table,
+                min_row_height=42,
+                allow_selection=False,
+                allow_editing=True,
+                word_wrap=False,
+            )
 
             self.coefficient_tables[template.key] = coeff_table
             self.coefficient_keys[template.key] = tuple(item.key for item in template.coefficients)

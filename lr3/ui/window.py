@@ -35,10 +35,12 @@ from PySide6.QtWidgets import (  # type: ignore[import-not-found]
     QApplication,
     QButtonGroup,
     QGroupBox,
+    QHBoxLayout,
     QLabel,
     QLineEdit,
     QMainWindow,
     QMessageBox,
+    QScrollArea,
     QSizePolicy,
     QSplitter,
     QTableWidget,
@@ -94,9 +96,9 @@ class GradientMethodsWindow(QMainWindow):
         root_layout.addWidget(splitter)
         self.setCentralWidget(root)
 
-        controls = self._build_controls_panel()
+        self._controls_panel = self._build_controls_panel()
         controls_scroll = create_scroll_container(
-            controls,
+            self._controls_panel,
             widget_resizable=True,
             horizontal_policy=Qt.ScrollBarAlwaysOff,
         )
@@ -185,6 +187,10 @@ class GradientMethodsWindow(QMainWindow):
                 color: #b8c1d1;
                 font-size: 15px;
             }
+            QLabel#SectionHint {
+                color: #a8b1c3;
+                font-size: 12px;
+            }
             QWidget#SummaryEmptyCard {
                 background: #181b24;
                 border: 1px solid #31384a;
@@ -230,6 +236,24 @@ class GradientMethodsWindow(QMainWindow):
         panel = controls.panel
         layout = controls.layout
 
+        objective_group, objective_layout = create_standard_group("Целевая функция")
+        expression_caption = QLabel("F(x1, x2)")
+        expression_caption.setObjectName("SectionCaption")
+        objective_layout.addWidget(expression_caption)
+
+        self.expression_input = QLineEdit()
+        self.expression_input.setPlaceholderText("Например: -(x1-1)^2 - 2*(x2+3)^2")
+        self.expression_input.textChanged.connect(self._update_formula_preview)
+        objective_layout.addWidget(self.expression_input)
+
+        self.formula_preview = QLabel()
+        self.formula_preview.setProperty("role", "formula-preview")
+        self.formula_preview.setTextFormat(Qt.RichText)
+        self.formula_preview.setWordWrap(True)
+        self.formula_preview.setAlignment(Qt.AlignCenter)
+        self.formula_preview.setMinimumHeight(74)
+        objective_layout.addWidget(self.formula_preview)
+
         method_group, method_layout = create_standard_group("Метод")
         method_caption = QLabel("Выбор метода")
         method_caption.setObjectName("SectionCaption")
@@ -247,23 +271,6 @@ class GradientMethodsWindow(QMainWindow):
         self.method_buttons = {key: button for key, button in zip(method_keys, method_buttons, strict=True)}
         method_layout.addWidget(method_row)
 
-        objective_group, objective_layout = create_standard_group("Целевая функция")
-        expression_caption = QLabel("F(x1, x2)")
-        expression_caption.setObjectName("SectionCaption")
-        objective_layout.addWidget(expression_caption)
-
-        self.expression_input = QLineEdit()
-        self.expression_input.setPlaceholderText("Например: -(x1-1)^2 - 2*(x2+3)^2")
-        objective_layout.addWidget(self.expression_input)
-
-        self.formula_preview = QLabel()
-        self.formula_preview.setProperty("role", "formula-preview")
-        self.formula_preview.setTextFormat(Qt.RichText)
-        self.formula_preview.setWordWrap(True)
-        self.formula_preview.setAlignment(Qt.AlignCenter)
-        self.formula_preview.setMinimumHeight(74)
-        objective_layout.addWidget(self.formula_preview)
-
         params_group = QGroupBox("Параметры")
         params_layout = create_parameter_grid(params_group)
 
@@ -277,25 +284,37 @@ class GradientMethodsWindow(QMainWindow):
         self.gradient_step_input = QLineEdit()
         self.max_step_expansions_input = QLineEdit()
 
-        add_parameter_row(params_layout, row=0, label="x1(0)", control=self.start_x1_input)
-        add_parameter_row(params_layout, row=1, label="x2(0)", control=self.start_x2_input)
-        add_parameter_row(params_layout, row=2, label="epsilon", control=self.epsilon_input)
-        add_parameter_row(params_layout, row=3, label="max_iterations", control=self.max_iterations_input)
-        add_parameter_row(params_layout, row=4, label="initial_step", control=self.initial_step_input)
-        add_parameter_row(params_layout, row=5, label="timeout_seconds", control=self.timeout_input)
-        add_parameter_row(params_layout, row=6, label="min_step", control=self.min_step_input)
-        add_parameter_row(params_layout, row=7, label="gradient_step", control=self.gradient_step_input)
+        start_row = QWidget()
+        start_layout = QHBoxLayout(start_row)
+        start_layout.setContentsMargins(0, 0, 0, 0)
+        start_layout.setSpacing(10)
+        start_x1_caption = QLabel("x1")
+        start_x1_caption.setObjectName("SectionCaption")
+        start_x2_caption = QLabel("x2")
+        start_x2_caption.setObjectName("SectionCaption")
+        start_layout.addWidget(start_x1_caption)
+        start_layout.addWidget(self.start_x1_input, 1)
+        start_layout.addWidget(start_x2_caption)
+        start_layout.addWidget(self.start_x2_input, 1)
+
+        add_parameter_row(params_layout, row=0, label="Стартовая точка", control=start_row)
+        add_parameter_row(params_layout, row=1, label="Точность ε", control=self.epsilon_input)
+        add_parameter_row(params_layout, row=2, label="Лимит итераций", control=self.max_iterations_input)
+        add_parameter_row(params_layout, row=3, label="Начальный шаг", control=self.initial_step_input)
+        add_parameter_row(params_layout, row=4, label="Таймаут (сек)", control=self.timeout_input)
+        add_parameter_row(params_layout, row=5, label="Мин. шаг", control=self.min_step_input)
+        add_parameter_row(params_layout, row=6, label="Шаг градиента", control=self.gradient_step_input)
         add_parameter_row(
             params_layout,
-            row=8,
-            label="max_step_expansions",
+            row=7,
+            label="Лимит расширений шага",
             control=self.max_step_expansions_input,
         )
 
         self.run_button = create_primary_action_button(text="Рассчитать", on_click=self._run_clicked)
 
-        layout.addWidget(method_group)
         layout.addWidget(objective_group)
+        layout.addWidget(method_group)
         layout.addWidget(params_group)
         layout.addWidget(self.run_button)
         layout.addStretch(1)
@@ -331,7 +350,13 @@ class GradientMethodsWindow(QMainWindow):
         self.summary_table.horizontalHeader().setDefaultAlignment(Qt.AlignCenter)
         self.summary_table.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.summary_table.setTextElideMode(Qt.ElideNone)
-        configure_data_table(self.summary_table, min_row_height=31, allow_selection=False, word_wrap=False)
+        configure_data_table(
+            self.summary_table,
+            min_row_height=31,
+            allow_selection=False,
+            allow_editing=False,
+            word_wrap=False,
+        )
         self._set_summary_table_empty_layout()
         summary_layout.addWidget(self.summary_table)
         workspace.tables_layout.addWidget(summary_group)
@@ -347,7 +372,13 @@ class GradientMethodsWindow(QMainWindow):
         self.steps_table.horizontalHeader().setDefaultAlignment(Qt.AlignCenter)
         self.steps_table.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.steps_table.setTextElideMode(Qt.ElideNone)
-        configure_data_table(self.steps_table, min_row_height=31, allow_selection=False, word_wrap=False)
+        configure_data_table(
+            self.steps_table,
+            min_row_height=31,
+            allow_selection=False,
+            allow_editing=False,
+            word_wrap=False,
+        )
         self._set_steps_table_empty_layout()
         steps_layout.addWidget(self.steps_table)
         workspace.tables_layout.addWidget(steps_group)
@@ -356,10 +387,34 @@ class GradientMethodsWindow(QMainWindow):
         plot_group.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         plot_layout = QVBoxLayout(plot_group)
 
+        self.plot_context_label = QLabel("")
+        self.plot_context_label.setObjectName("SectionHint")
+        self.plot_context_label.setWordWrap(True)
+        self.plot_context_label.hide()
+        plot_layout.addWidget(self.plot_context_label)
+
+        self.plot_state_label = QLabel("График появится после расчёта.")
+        self.plot_state_label.setAlignment(Qt.AlignCenter)
+        plot_layout.addWidget(self.plot_state_label)
+
+        plot_scroll = QScrollArea()
+        plot_scroll.setWidgetResizable(True)
+        plot_scroll.setFrameShape(QScrollArea.NoFrame)
+        plot_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        plot_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        plot_scroll.verticalScrollBar().setSingleStep(32)
+
+        plot_host = QWidget()
+        plot_host_layout = QHBoxLayout(plot_host)
+        plot_host_layout.setContentsMargins(0, 0, 0, 0)
+        plot_host_layout.setSpacing(0)
+
         self.canvas = PlotCanvas()
         self.canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.canvas.setMinimumHeight(620)
-        plot_layout.addWidget(self.canvas)
+        plot_host_layout.addWidget(self.canvas)
+        plot_scroll.setWidget(plot_host)
+        plot_layout.addWidget(plot_scroll)
         workspace.plots_layout.addWidget(plot_group)
 
         return workspace.panel
@@ -398,10 +453,7 @@ class GradientMethodsWindow(QMainWindow):
         self.min_step_input.setText("1e-8")
         self.gradient_step_input.setText("1e-6")
         self.max_step_expansions_input.setText("16")
-        self.formula_preview.setText(
-            "F(x<sub>1</sub>, x<sub>2</sub>) = "
-            f"<code>{self.expression_input.text().replace('*', '&#8727;')}</code>"
-        )
+        self._update_formula_preview(self.expression_input.text())
 
     def _run_clicked(self) -> None:
         if self._run_task.is_running():
@@ -528,6 +580,13 @@ class GradientMethodsWindow(QMainWindow):
         objective = compile_objective(payload.expression)
         result = payload.result
 
+        self.plot_state_label.hide()
+        self.plot_context_label.setText(
+            f"Метод: {result.method_name} | Trace ID: {payload.metrics.trace_id} | "
+            f"Итераций: {result.iterations_count} | Причина остановки: {result.stop_reason}"
+        )
+        self.plot_context_label.show()
+
         with dark_plot_context():
             figure = self.canvas.figure
             figure.clear()
@@ -580,6 +639,9 @@ class GradientMethodsWindow(QMainWindow):
             self.canvas.draw()
 
     def _clear_plot(self) -> None:
+        self.plot_context_label.hide()
+        self.plot_state_label.setText("График появится после расчёта.")
+        self.plot_state_label.show()
         clear_plot_canvas(
             self.canvas,
             message="График появится после запуска расчета",
@@ -610,8 +672,14 @@ class GradientMethodsWindow(QMainWindow):
         stack.set_empty(is_empty)
 
     def _set_busy(self, busy: bool) -> None:
+        self._controls_panel.setEnabled(not busy)
         self.run_button.setDisabled(busy)
         self.run_button.setText("Считаю..." if busy else "Рассчитать")
+
+    def _update_formula_preview(self, raw_expression: str) -> None:
+        expression = raw_expression.strip() or "—"
+        readable = expression.replace("**", "^").replace("*", "·")
+        self.formula_preview.setText(f"F(x<sub>1</sub>, x<sub>2</sub>) = <code>{readable}</code>")
 
 
 def main() -> None:

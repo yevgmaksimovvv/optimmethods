@@ -11,9 +11,15 @@ def configure_data_table(
     *,
     min_row_height: int,
     allow_selection: bool,
+    allow_editing: bool,
     word_wrap: bool,
 ) -> None:
-    """Применяет базовую конфигурацию таблицы с данными."""
+    """Применяет базовую конфигурацию таблицы с данными.
+
+    Контракт:
+    - `allow_selection` управляет только режимом выделения строк;
+    - `allow_editing` управляет только редактированием ячеек.
+    """
     table.setAlternatingRowColors(True)
     table.setWordWrap(word_wrap)
     table.setTextElideMode(Qt.ElideRight)
@@ -23,12 +29,25 @@ def configure_data_table(
     table.verticalHeader().setDefaultAlignment(Qt.AlignCenter)
     table.verticalHeader().setDefaultSectionSize(min_row_height)
     table.verticalHeader().setMinimumSectionSize(min_row_height)
+
     if allow_selection:
         table.setSelectionBehavior(QTableWidget.SelectRows)
         table.setSelectionMode(QAbstractItemView.SingleSelection)
     else:
         table.setSelectionMode(QAbstractItemView.NoSelection)
+
+    if allow_editing:
+        table.setEditTriggers(
+            QAbstractItemView.DoubleClicked
+            | QAbstractItemView.EditKeyPressed
+            | QAbstractItemView.AnyKeyPressed
+        )
+    else:
         table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+
+    if allow_selection or allow_editing:
+        table.setFocusPolicy(Qt.StrongFocus)
+    else:
         table.setFocusPolicy(Qt.NoFocus)
 
 

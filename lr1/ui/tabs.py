@@ -160,7 +160,13 @@ def _create_table_widget() -> QTableWidget:
     """Создаёт базовую таблицу с общей конфигурацией стиля для вкладки `Сводка`."""
     table = QTableWidget()
     table.setProperty("variant", "report")
-    configure_data_table(table, min_row_height=31, allow_selection=False, word_wrap=True)
+    configure_data_table(
+        table,
+        min_row_height=31,
+        allow_selection=False,
+        allow_editing=False,
+        word_wrap=True,
+    )
     table.verticalHeader().setVisible(False)
     table.horizontalHeader().setHighlightSections(False)
     return table

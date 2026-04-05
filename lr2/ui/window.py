@@ -323,7 +323,13 @@ class RosenbrockWindow(QMainWindow):
         self.coefficients_table.verticalHeader().setMinimumSectionSize(34)
         self.coefficients_table.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.coefficients_table.setMinimumHeight(220)
-        configure_data_table(self.coefficients_table, min_row_height=30, allow_selection=False, word_wrap=False)
+        configure_data_table(
+            self.coefficients_table,
+            min_row_height=30,
+            allow_selection=False,
+            allow_editing=True,
+            word_wrap=False,
+        )
         self._reset_coefficient_table()
         coeff_label = QLabel("Коэффициенты c<sub>ij</sub>")
         coeff_label.setTextFormat(Qt.RichText)
@@ -403,7 +409,13 @@ class RosenbrockWindow(QMainWindow):
         self.summary_table.setMinimumHeight(140)
         self.summary_table.verticalHeader().setVisible(False)
         self.summary_table.itemSelectionChanged.connect(self._on_summary_selection_changed)
-        configure_data_table(self.summary_table, min_row_height=31, allow_selection=True, word_wrap=False)
+        configure_data_table(
+            self.summary_table,
+            min_row_height=31,
+            allow_selection=True,
+            allow_editing=False,
+            word_wrap=False,
+        )
         summary_layout.addWidget(self.summary_table)
         table_content_layout.addWidget(summary_group)
 
@@ -435,7 +447,13 @@ class RosenbrockWindow(QMainWindow):
         self._set_steps_table_empty_layout()
         self.steps_table.setMinimumHeight(190)
         self.steps_table.verticalHeader().setVisible(False)
-        configure_data_table(self.steps_table, min_row_height=31, allow_selection=False, word_wrap=False)
+        configure_data_table(
+            self.steps_table,
+            min_row_height=31,
+            allow_selection=False,
+            allow_editing=False,
+            word_wrap=False,
+        )
         steps_layout.addWidget(self.steps_table)
         table_content_layout.addWidget(steps_group)
         self._set_results_tab_empty_state(True)
