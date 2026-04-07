@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from functools import partial
 from typing import Sequence
 from typing import Callable
 
@@ -118,7 +117,7 @@ def create_choice_chip_grid(
         if tooltips is not None and value in tooltips:
             button.setToolTip(tooltips[value])
         if on_clicked is not None:
-            button.clicked.connect(partial(on_clicked, value))
+            button.clicked.connect(lambda checked=True, value=value: on_clicked(value, checked))
         group.addButton(button)
         layout.addWidget(button, index // columns, index % columns)
         buttons.append(button)

@@ -2,22 +2,22 @@
 
 from __future__ import annotations
 
+import html
 import math
 import sys
 from dataclasses import dataclass
+from collections.abc import Callable
 
 import numpy as np
 from optim_core.ui import (
     ControlsPanel,
     DarkQtThemeTokens,
-    MathHeaderView,
     PlotCanvas,
     TaskController,
     add_parameter_row,
     build_choice_chip_styles,
     build_dark_qt_base_styles,
     clear_plot_canvas,
-    configure_data_table,
     configure_two_panel_splitter,
     create_choice_chip_grid,
     create_controls_panel,
@@ -27,13 +27,12 @@ from optim_core.ui import (
     create_scroll_container,
     create_standard_group,
     dark_plot_context,
-    set_table_data_layout,
-    set_table_empty_layout,
 )
 from PySide6.QtCore import Qt  # type: ignore[import-not-found]
 from PySide6.QtWidgets import (  # type: ignore[import-not-found]
     QApplication,
     QButtonGroup,
+    QFormLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -43,8 +42,6 @@ from PySide6.QtWidgets import (  # type: ignore[import-not-found]
     QScrollArea,
     QSizePolicy,
     QSplitter,
-    QTableWidget,
-    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -58,10 +55,50 @@ from lr3.application.services import (
     run_conjugate,
     run_gradient,
 )
-from lr3.domain.expression import compile_objective
-from lr3.domain.models import OptimizationResult
+from lr3.domain.expression import analyze_local_extremum, compile_objective
+from lr3.domain.models import ExtremumAnalysis, IterationRecord, MethodConfig, OptimizationResult, Point2D
 
 APP_TITLE = "ЛР3 — Градиентные методы"
+
+FUNCTION_PRESET_CONFIGS = {
+    "gradient": {
+        "label": "Градиентная",
+        "tooltip": "Функция из задания для метода первого порядка.",
+        "expression": DEFAULT_GRADIENT_EXPRESSION,
+        "method": "gradient",
+    },
+    "conjugate": {
+        "label": "Сопряжённых градиентов",
+        "tooltip": "Функция из задания для метода сопряжённых градиентов.",
+        "expression": DEFAULT_CONJUGATE_EXPRESSION,
+        "method": "conjugate",
+    },
+    "custom": {
+        "label": "Пользовательская",
+        "tooltip": "Своя функция. Выражение можно редактировать вручную.",
+        "expression": None,
+        "method": None,
+    },
+}
+
+METHOD_DEFAULTS = {
+    "gradient": {
+        "x1": "0",
+        "x2": "0",
+        "step": "0.1",
+        "eps": "1e-6",
+        "iters": "1000",
+        "timeout": "3.0",
+    },
+    "conjugate": {
+        "x1": "1",
+        "x2": "1",
+        "step": "0.2",
+        "eps": "1e-6",
+        "iters": "300",
+        "timeout": "3.0",
+    },
+}
 
 
 @dataclass(frozen=True)
@@ -69,6 +106,7 @@ class RunPayload:
     """Результат одного запуска для UI-потока."""
 
     expression: str
+    config: MethodConfig
     result: OptimizationResult
     metrics: ServiceMetrics
 
@@ -86,6 +124,8 @@ class GradientMethodsWindow(QMainWindow):
         self._run_task = TaskController(self)
         self._run_task.succeeded.connect(self._on_run_succeeded)
         self._run_task.failed.connect(self._on_run_failed)
+        self._active_preset_key = "gradient"
+        self._custom_expression_cache = DEFAULT_GRADIENT_EXPRESSION
 
         root = QWidget()
         root_layout = QVBoxLayout(root)
@@ -113,6 +153,8 @@ class GradientMethodsWindow(QMainWindow):
             handle_width=8,
         )
 
+        self.preset_buttons["gradient"].setChecked(True)
+        self._apply_preset("gradient")
         self.method_buttons["gradient"].setChecked(True)
         self._set_method_defaults("gradient", True)
         self._set_results_empty_state(True)
@@ -164,6 +206,25 @@ class GradientMethodsWindow(QMainWindow):
         layout = controls.layout
 
         basic_group, basic_layout = create_standard_group("Основные")
+        preset_caption = QLabel("Пресет функции")
+        preset_caption.setObjectName("SectionCaption")
+        basic_layout.addWidget(preset_caption)
+
+        self.preset_group = QButtonGroup(self)
+        self.preset_group.setExclusive(True)
+        preset_keys = ("gradient", "conjugate", "custom")
+        preset_row, preset_buttons = create_choice_chip_grid(
+            group=self.preset_group,
+            options=tuple((FUNCTION_PRESET_CONFIGS[key]["label"], key) for key in preset_keys),
+            columns=3,
+            horizontal_spacing=6,
+            vertical_spacing=6,
+            on_clicked=self._on_preset_selected,
+            tooltips={key: FUNCTION_PRESET_CONFIGS[key]["tooltip"] for key in preset_keys},
+        )
+        self.preset_buttons = {key: button for key, button in zip(preset_keys, preset_buttons, strict=True)}
+        basic_layout.addWidget(preset_row)
+
         expression_caption = QLabel("Формула")
         expression_caption.setObjectName("SectionCaption")
         basic_layout.addWidget(expression_caption)
@@ -248,66 +309,41 @@ class GradientMethodsWindow(QMainWindow):
 
     def _build_results_panel(self) -> QWidget:
         workspace = create_results_workspace(
-            results_title="Таблицы",
+            results_title="Отчёт",
             plot_title="Графики",
             with_tables_empty_state=True,
             tables_empty_title="Пока нет результатов",
             tables_empty_description=(
                 "Слева выбери метод, формулу и параметры расчёта.\n"
-                "После запуска здесь появятся результаты и таблица итераций."
+                "После запуска здесь появится учебный отчёт по итерациям и графики."
             ),
-            tables_empty_hint="Нажми «Рассчитать», чтобы получить результаты и графики.",
+            tables_empty_hint="Нажми «Рассчитать», чтобы получить отчёт и графики.",
         )
 
         self.results_empty_stack = workspace.tables_empty_stack
         if self.results_empty_stack is None:
-            raise RuntimeError("Ожидался EmptyStateStack для вкладки таблиц")
+            raise RuntimeError("Ожидался EmptyStateStack для отчётной вкладки")
 
-        summary_group = QGroupBox("Результаты расчёта")
-        summary_layout = QVBoxLayout(summary_group)
-        self.summary_table = QTableWidget(0, 7)
-        self.summary_table.setHorizontalHeaderLabels(
-            ["Метод", "Старт", "x*", "f(x*)", "Итераций", "Результат", "Причина завершения"]
-        )
-        summary_header = MathHeaderView(Qt.Horizontal, self.summary_table)
-        self.summary_table.setHorizontalHeader(summary_header)
-        summary_header.set_math_labels(["Метод", "Старт", "x*", "f(x*)", "Итераций", "Результат", "Причина"])
-        self.summary_table.verticalHeader().setVisible(False)
-        self.summary_table.horizontalHeader().setDefaultAlignment(Qt.AlignCenter)
-        self.summary_table.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        self.summary_table.setTextElideMode(Qt.ElideNone)
-        configure_data_table(
-            self.summary_table,
-            min_row_height=31,
-            allow_selection=False,
-            allow_editing=False,
-            word_wrap=False,
-        )
-        self._set_summary_table_empty_layout()
-        summary_layout.addWidget(self.summary_table)
-        workspace.tables_layout.addWidget(summary_group)
+        report_group = QGroupBox("Учебный отчёт")
+        report_group.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        report_layout = QVBoxLayout(report_group)
+        report_layout.setContentsMargins(14, 12, 14, 14)
+        report_layout.setSpacing(10)
 
-        steps_group = QGroupBox("Итерации")
-        steps_layout = QVBoxLayout(steps_group)
-        self.steps_table = QTableWidget(0, 6)
-        self.steps_table.setHorizontalHeaderLabels(["k", "x1", "x2", "F(x)", "||grad||", "Шаг"])
-        steps_header = MathHeaderView(Qt.Horizontal, self.steps_table)
-        self.steps_table.setHorizontalHeader(steps_header)
-        steps_header.set_math_labels(["k", "x<sub>1</sub>", "x<sub>2</sub>", "F(x)", "||grad||", "Шаг"])
-        self.steps_table.verticalHeader().setVisible(False)
-        self.steps_table.horizontalHeader().setDefaultAlignment(Qt.AlignCenter)
-        self.steps_table.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        self.steps_table.setTextElideMode(Qt.ElideNone)
-        configure_data_table(
-            self.steps_table,
-            min_row_height=31,
-            allow_selection=False,
-            allow_editing=False,
-            word_wrap=False,
-        )
-        self._set_steps_table_empty_layout()
-        steps_layout.addWidget(self.steps_table)
-        workspace.tables_layout.addWidget(steps_group)
+        self.report_scroll = QScrollArea()
+        self.report_scroll.setWidgetResizable(True)
+        self.report_scroll.setFrameShape(QScrollArea.NoFrame)
+        self.report_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.report_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.report_scroll.verticalScrollBar().setSingleStep(32)
+
+        self.report_content = QWidget()
+        self.report_layout = QVBoxLayout(self.report_content)
+        self.report_layout.setContentsMargins(0, 0, 0, 0)
+        self.report_layout.setSpacing(12)
+        self.report_scroll.setWidget(self.report_content)
+        report_layout.addWidget(self.report_scroll)
+        workspace.tables_layout.addWidget(report_group)
 
         plot_group = QGroupBox("Графики")
         plot_group.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
@@ -345,31 +381,31 @@ class GradientMethodsWindow(QMainWindow):
 
         return workspace.panel
 
-    def _set_method_defaults(self, method: str, checked: bool) -> None:
+    def _on_preset_selected(self, preset_key: str, checked: bool = True) -> None:
         if not checked:
             return
-        defaults = {
-            "gradient": {
-                "expr": DEFAULT_GRADIENT_EXPRESSION,
-                "x1": "0",
-                "x2": "0",
-                "step": "0.1",
-                "eps": "1e-6",
-                "iters": "1000",
-                "timeout": "3.0",
-            },
-            "conjugate": {
-                "expr": DEFAULT_CONJUGATE_EXPRESSION,
-                "x1": "1",
-                "x2": "1",
-                "step": "0.2",
-                "eps": "1e-6",
-                "iters": "300",
-                "timeout": "3.0",
-            },
-        }
-        config = defaults[method]
-        self.expression_input.setText(config["expr"])
+        self._active_preset_key = preset_key
+        for key, button in self.preset_buttons.items():
+            button.setChecked(key == preset_key)
+        self._apply_preset(preset_key)
+
+    def _apply_preset(self, preset_key: str) -> None:
+        preset = FUNCTION_PRESET_CONFIGS[preset_key]
+        expression = preset["expression"]
+        is_custom = expression is None
+        self.expression_input.setReadOnly(not is_custom)
+        if expression is not None:
+            self.expression_input.setText(expression)
+        else:
+            self.expression_input.setText(self._custom_expression_cache)
+        if preset["method"] is not None:
+            self.method_buttons[preset["method"]].setChecked(True)
+            self._set_method_defaults(preset["method"], True)
+
+    def _set_method_defaults(self, method: str, checked: bool = True) -> None:
+        if not checked:
+            return
+        config = METHOD_DEFAULTS[method]
         self.start_x1_input.setText(config["x1"])
         self.start_x2_input.setText(config["x2"])
         self.initial_step_input.setText(config["step"])
@@ -443,7 +479,7 @@ class GradientMethodsWindow(QMainWindow):
         else:
             raise ValueError(f"Неизвестный метод: {method}")
 
-        return RunPayload(expression=expression, result=result, metrics=metrics)
+        return RunPayload(expression=expression, config=config, result=result, metrics=metrics)
 
     def _on_run_succeeded(self, payload: object) -> None:
         self._set_busy(False)
@@ -452,8 +488,7 @@ class GradientMethodsWindow(QMainWindow):
             return
 
         self._last_payload = payload
-        self._render_summary(payload)
-        self._render_iterations(payload.result)
+        self._render_report(payload)
         self._render_plot(payload)
         self._set_results_empty_state(False)
 
@@ -461,45 +496,325 @@ class GradientMethodsWindow(QMainWindow):
         self._set_busy(False)
         QMessageBox.critical(self, "Ошибка расчёта", message)
 
-    def _render_summary(self, payload: RunPayload) -> None:
+    def _render_report(self, payload: RunPayload) -> None:
+        self._clear_report()
+
         result = payload.result
-        rows = [
-            result.method_name,
-            f"({result.start_point[0]:.6f}; {result.start_point[1]:.6f})",
-            f"({result.optimum_point[0]:.8f}; {result.optimum_point[1]:.8f})",
-            f"{result.optimum_value:.8f}",
-            str(result.iterations_count),
-            self._format_result_status(result.success),
-            self._format_stop_reason(result.stop_reason),
-        ]
+        objective = compile_objective(payload.expression)
+        analysis = analyze_local_extremum(payload.expression, result.start_point, goal="max")
 
-        self.summary_table.setRowCount(1)
-        for column, value in enumerate(rows):
-            item = QTableWidgetItem(value)
-            item.setTextAlignment(Qt.AlignCenter)
-            self.summary_table.setItem(0, column, item)
-        self._set_summary_table_data_layout()
-
-    def _render_iterations(self, result: OptimizationResult) -> None:
-        records = result.records
-        self.steps_table.setRowCount(len(records))
-
-        for row, record in enumerate(records):
-            grad_norm = math.hypot(record.gradient[0], record.gradient[1])
-            values = (
-                str(record.k),
-                f"{record.point[0]:.8f}",
-                f"{record.point[1]:.8f}",
-                f"{record.value:.8f}",
-                f"{grad_norm:.4e}",
-                f"{record.step_size:.8f}",
+        self.report_layout.addWidget(
+            self._build_task_card(
+                payload=payload,
             )
-            for column, value in enumerate(values):
-                item = QTableWidgetItem(value)
-                item.setTextAlignment(Qt.AlignCenter)
-                self.steps_table.setItem(row, column, item)
+        )
+        self.report_layout.addWidget(
+            self._build_analysis_card(
+                analysis=analysis,
+            )
+        )
 
-        self._set_steps_table_data_layout()
+        iteration_cards = self._build_iteration_cards(payload, objective)
+        if iteration_cards:
+            for card in iteration_cards:
+                self.report_layout.addWidget(card)
+        else:
+            self.report_layout.addWidget(self._build_empty_iterations_card())
+
+        self.report_layout.addWidget(self._build_summary_card(payload, analysis))
+        self.report_layout.addStretch(1)
+
+    def _build_task_card(self, payload: RunPayload) -> QWidget:
+        result = payload.result
+        card, form = self._create_report_card("Постановка задачи")
+        method_title = self._format_method_title(result.method_name)
+        self._add_report_row(form, "Метод", self._math_text(method_title))
+        self._add_report_row(form, "Цель", self._math_text("Поиск максимума"))
+        self._add_report_row(form, "Функция", self._math_text(f"F(x1, x2) = {self._format_formula(payload.expression)}"))
+        self._add_report_row(form, "M<sub>0</sub>", self._math_text(self._format_point(result.start_point)))
+        return card
+
+    def _build_analysis_card(
+        self,
+        *,
+        analysis: ExtremumAnalysis,
+    ) -> QWidget:
+        card, form = self._create_report_card("Аналитическая подготовка")
+        self._add_report_row(form, "Исходная функция", self._math_text(f"F(x1, x2) = {self._format_formula(analysis.expression)}"))
+        self._add_report_row(form, "Начальная точка", self._math_text(self._format_point(analysis.start_point)))
+        self._add_report_row(
+            form,
+            "Общий градиент",
+            self._math_text(
+                f"∇f(x<sub>1</sub>, x<sub>2</sub>) = ({self._format_formula(analysis.gradient_formula[0])}; {self._format_formula(analysis.gradient_formula[1])})"
+            ),
+        )
+        self._add_report_row(
+            form,
+            "∇f(M<sub>0</sub>)",
+            self._math_text(f"({self._format_scalar(analysis.gradient_at_start[0])}; {self._format_scalar(analysis.gradient_at_start[1])})"),
+        )
+        if analysis.stationary_points:
+            self._add_report_row(
+                form,
+                "Решение ∇f(x) = 0",
+                self._math_text(self._format_stationary_points(analysis.stationary_points)),
+            )
+            if analysis.stationary_gradient is not None:
+                self._add_report_row(
+                    form,
+                    "∇f(M<sub>*</sub>)",
+                    self._math_text(
+                        f"({self._format_scalar(analysis.stationary_gradient[0])}; {self._format_scalar(analysis.stationary_gradient[1])})"
+                    ),
+                )
+        else:
+            self._add_report_row(form, "Решение ∇f(x) = 0", self._math_text("строгий аналитический поиск стационарной точки не выполнен"))
+        self._add_report_row(form, "Матрица Гессе", self._math_text(self._format_matrix(analysis.hessian_formula)))
+        if analysis.hessian_at_stationary_point is not None:
+            self._add_report_row(
+                form,
+                "H(M<sub>*</sub>)",
+                self._math_text(self._format_matrix(analysis.hessian_at_stationary_point, scalar_formatter=self._format_scalar)),
+            )
+        else:
+            self._add_report_row(form, "H(M<sub>*</sub>)", self._math_text("не вычислена"))
+        self._add_report_row(form, "Вывод", self._math_text(analysis.theory_conclusion))
+        self._add_report_row(form, "Согласование", self._math_text(analysis.goal_alignment))
+        self._add_report_row(form, "Ограничение", self._math_text(analysis.strictness_note))
+        return card
+
+    def _build_iteration_cards(self, payload: RunPayload, objective: Callable[[Point2D], float]) -> list[QWidget]:
+        result = payload.result
+        if result.method_name == "gradient_ascent":
+            return self._build_gradient_iteration_cards(payload, objective)
+        if result.method_name == "conjugate_gradient_ascent":
+            return self._build_conjugate_iteration_cards(payload)
+        return []
+
+    def _build_gradient_iteration_cards(self, payload: RunPayload, objective: Callable[[Point2D], float]) -> list[QWidget]:
+        result = payload.result
+        cards: list[QWidget] = []
+        for record in result.records:
+            has_step = record.step_size > 0.0
+            new_point = self._translate_point(record.point, record.gradient, record.step_size) if has_step else None
+            new_value = objective(new_point) if new_point is not None else None
+            note = self._gradient_step_note(record.step_size, payload.config.initial_step, result)
+            card, form = self._create_report_card(f"Итерация {record.k + 1}", object_name="IterationCard")
+            self._add_report_row(form, "Текущая точка", self._math_text(self._format_point(record.point)))
+            self._add_report_row(form, "F(M<sub>k</sub>)", self._math_text(self._format_scalar(record.value)))
+            self._add_report_row(
+                form,
+                "∇f(M<sub>k</sub>)",
+                self._math_text(f"({self._format_scalar(record.gradient[0])}; {self._format_scalar(record.gradient[1])})"),
+            )
+            self._add_report_row(form, "h<sub>k</sub>", self._math_text(self._format_step(record.step_size)))
+            if new_point is not None and new_value is not None:
+                self._add_report_row(
+                    form,
+                    f"M<sub>{record.k + 1}</sub>",
+                    self._math_text(
+                        f"M<sub>{record.k + 1}</sub> = M<sub>{record.k}</sub> + h<sub>{record.k}</sub>·∇f(M<sub>{record.k}</sub>) = {self._format_point(new_point)}"
+                    ),
+                )
+                self._add_report_row(
+                    form,
+                    f"F(M<sub>{record.k + 1}</sub>)",
+                    self._math_text(self._format_scalar(new_value)),
+                )
+            else:
+                self._add_report_row(form, "Переход", self._math_text("Шаг не выполнен"))
+            self._add_report_row(form, "Комментарий", self._math_text(note))
+            cards.append(card)
+        return cards
+
+    def _build_conjugate_iteration_cards(self, payload: RunPayload) -> list[QWidget]:
+        result = payload.result
+        cards: list[QWidget] = []
+        for index, record in enumerate(result.records):
+            note = self._conjugate_step_note(record, result)
+            card, form = self._create_report_card(f"Итерация {index + 1}", object_name="IterationCard")
+            self._add_report_row(form, "Текущая точка", self._math_text(self._format_point(record.point)))
+            self._add_report_row(form, "F(M<sub>k</sub>)", self._math_text(self._format_scalar(record.value)))
+            self._add_report_row(
+                form,
+                "∇f(M<sub>k</sub>)",
+                self._math_text(f"({self._format_scalar(record.gradient[0])}; {self._format_scalar(record.gradient[1])})"),
+            )
+            if record.direction is not None:
+                self._add_report_row(
+                    form,
+                    "s<sub>k</sub>",
+                    self._math_text(
+                        f"({self._format_scalar(record.direction[0])}; {self._format_scalar(record.direction[1])})"
+                    ),
+                )
+            if record.beta is not None:
+                self._add_report_row(form, "β<sub>k</sub>", self._math_text(self._format_scalar(record.beta)))
+            self._add_report_row(form, "λ<sub>k</sub>", self._math_text(self._format_step(record.step_size)))
+            if record.next_point is not None and record.next_value is not None:
+                self._add_report_row(
+                    form,
+                    f"M<sub>{index + 1}</sub>",
+                    self._math_text(
+                        f"M<sub>{index + 1}</sub> = M<sub>{index}</sub> + λ<sub>{index}</sub>·s<sub>{index}</sub> = {self._format_point(record.next_point)}"
+                    ),
+                )
+                self._add_report_row(
+                    form,
+                    f"F(M<sub>{index + 1}</sub>)",
+                    self._math_text(self._format_scalar(record.next_value)),
+                )
+            else:
+                self._add_report_row(form, "Переход", self._math_text("Шаг не выполнен"))
+            self._add_report_row(form, "Комментарий", self._math_text(note))
+            cards.append(card)
+        return cards
+
+    def _build_empty_iterations_card(self) -> QWidget:
+        card, form = self._create_report_card("Итерации")
+        self._add_report_row(form, "Статус", self._math_text("Итерации не выполнены"))
+        return card
+
+    def _build_summary_card(self, payload: RunPayload, analysis: ExtremumAnalysis) -> QWidget:
+        result = payload.result
+        card, form = self._create_report_card("Итоговый вывод")
+        self._add_report_row(form, "Требовалось найти", self._math_text("поиск максимума"))
+        self._add_report_row(form, "Теория", self._math_text(analysis.stationary_point_kind))
+        self._add_report_row(form, "Согласование", self._math_text(analysis.goal_alignment))
+        self._add_report_row(form, "Численный статус", self._math_text(self._format_success_text(result.success)))
+        self._add_report_row(form, "Найденная точка", self._math_text(self._format_point(result.optimum_point)))
+        self._add_report_row(form, "F(x*)", self._math_text(self._format_scalar(result.optimum_value)))
+        self._add_report_row(form, "Итераций", self._math_text(str(result.iterations_count)))
+        self._add_report_row(form, "Причина остановки", self._math_text(self._format_stop_reason(result.stop_reason)))
+
+        if result.records:
+            last_record = result.records[-1]
+            last_norm = math.hypot(last_record.gradient[0], last_record.gradient[1])
+            self._add_report_row(form, "Норма градиента", self._math_text(self._format_scalar(last_norm)))
+            if last_record.step_size > 0.0:
+                self._add_report_row(form, "Последний шаг", self._math_text(self._format_step(last_record.step_size)))
+        return card
+
+    def _clear_report(self) -> None:
+        self._clear_layout(self.report_layout)
+
+    def _create_report_card(self, title: str, *, object_name: str = "ReportCard") -> tuple[QGroupBox, QFormLayout]:
+        card = QGroupBox(title)
+        card.setObjectName(object_name)
+        card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        card_layout = QFormLayout(card)
+        card_layout.setLabelAlignment(Qt.AlignLeft | Qt.AlignTop)
+        card_layout.setFormAlignment(Qt.AlignTop)
+        card_layout.setHorizontalSpacing(16)
+        card_layout.setVerticalSpacing(8)
+        card_layout.setContentsMargins(16, 14, 16, 14)
+        return card, card_layout
+
+    def _add_report_row(self, form: QFormLayout, caption: str, value: str) -> None:
+        caption_label = QLabel(caption)
+        caption_label.setProperty("role", "report-caption")
+        caption_label.setTextFormat(Qt.RichText)
+        caption_label.setWordWrap(True)
+
+        value_label = QLabel(value)
+        value_label.setProperty("role", "report-value")
+        value_label.setTextFormat(Qt.RichText)
+        value_label.setWordWrap(True)
+        value_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        form.addRow(caption_label, value_label)
+
+    @staticmethod
+    def _clear_layout(layout: QVBoxLayout) -> None:
+        while layout.count():
+            item = layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+
+    @staticmethod
+    def _translate_point(point: Point2D, direction: Point2D, scale: float) -> Point2D:
+        return (point[0] + scale * direction[0], point[1] + scale * direction[1])
+
+    def _gradient_step_note(self, step_size: float, initial_step: float, result: OptimizationResult) -> str:
+        if step_size <= 0.0:
+            if result.stop_reason == "gradient_norm_reached":
+                return "Достигнута требуемая точность, переход не выполнялся."
+            return "Улучшающий шаг не найден, метод остановлен."
+        if math.isclose(step_size, initial_step, rel_tol=1e-9, abs_tol=1e-12):
+            return f"Шаг принят без изменения: h = {self._format_step(step_size)}."
+        if step_size < initial_step:
+            return f"Шаг уменьшен до h = {self._format_step(step_size)}."
+        return f"Шаг увеличен до h = {self._format_step(step_size)}."
+
+    def _conjugate_step_note(self, record: IterationRecord, result: OptimizationResult) -> str:
+        if record.step_size <= 0.0:
+            if result.stop_reason == "gradient_norm_reached":
+                return "Достигнута требуемая точность, переход не выполнялся."
+            return "Улучшающий шаг не найден, метод остановлен."
+        parts: list[str] = [f"Найден шаг λ = {self._format_step(record.step_size)}."]
+        if record.beta is not None:
+            parts.append(f"β = {self._format_scalar(record.beta)}.")
+        if record.restart_direction:
+            parts.append("Выполнен перезапуск направления.")
+        return " ".join(parts)
+
+    @staticmethod
+    def _format_method_title(method_name: str) -> str:
+        labels = {
+            "gradient_ascent": "Градиентный метод первого порядка",
+            "conjugate_gradient_ascent": "Метод сопряжённых градиентов Флетчера-Ривса",
+        }
+        return labels.get(method_name, method_name)
+
+    @staticmethod
+    def _format_success_text(success: bool) -> str:
+        return "метод завершился успешно" if success else "расчёт остановлен"
+
+    @staticmethod
+    def _format_point(point: Point2D) -> str:
+        return f"({point[0]:.8f}; {point[1]:.8f})"
+
+    @staticmethod
+    def _format_scalar(value: float) -> str:
+        return f"{value:.8g}"
+
+    @staticmethod
+    def _format_step(value: float) -> str:
+        return f"{value:.8g}"
+
+    @staticmethod
+    def _format_formula(expression: str) -> str:
+        readable = expression.replace("**", "^").replace("*", "·")
+        readable = html.escape(readable)
+        readable = readable.replace("x1", "x<sub>1</sub>").replace("x2", "x<sub>2</sub>")
+        return readable
+
+    @staticmethod
+    def _format_stationary_points(points: tuple[Point2D, ...]) -> str:
+        if not points:
+            return "не найдены"
+        if len(points) == 1:
+            return f"M<sub>*</sub> = {GradientMethodsWindow._format_point(points[0])}"
+        formatted = ", ".join(
+            f"M<sub>*{index + 1}</sub> = {GradientMethodsWindow._format_point(point)}" for index, point in enumerate(points)
+        )
+        return formatted
+
+    @staticmethod
+    def _format_matrix(
+        matrix: tuple[tuple[str, str], tuple[str, str]] | tuple[tuple[float, float], tuple[float, float]],
+        *,
+        scalar_formatter: Callable[[float], str] | None = None,
+    ) -> str:
+        formatter = scalar_formatter or (lambda value: value if isinstance(value, str) else str(value))
+        first_row = " ; ".join(formatter(value) for value in matrix[0])
+        second_row = " ; ".join(formatter(value) for value in matrix[1])
+        return f"[[{first_row}]; [{second_row}]]"
+
+    @staticmethod
+    def _math_text(text: str) -> str:
+        return f"<span style=\"font-family: 'Consolas', 'SF Mono', monospace;\">{text}</span>"
 
     def _render_plot(self, payload: RunPayload) -> None:
         objective = compile_objective(payload.expression)
@@ -507,7 +822,7 @@ class GradientMethodsWindow(QMainWindow):
 
         self.plot_state_label.hide()
         self.plot_context_label.setText(
-            f"Метод: {result.method_name} | Итераций: {result.iterations_count} | "
+            f"Метод: {self._format_method_title(result.method_name)} | Итераций: {result.iterations_count} | "
             f"Причина завершения: {self._format_stop_reason(result.stop_reason)}"
         )
         self.plot_context_label.show()
@@ -560,7 +875,6 @@ class GradientMethodsWindow(QMainWindow):
             ax_convergence.set_ylabel("F(x)")
             ax_convergence.grid(True, alpha=0.3)
 
-            figure.tight_layout()
             self.canvas.draw()
 
     def _clear_plot(self) -> None:
@@ -575,18 +889,6 @@ class GradientMethodsWindow(QMainWindow):
                 return method
         return None
 
-    def _set_summary_table_empty_layout(self) -> None:
-        set_table_empty_layout(self.summary_table)
-
-    def _set_summary_table_data_layout(self) -> None:
-        set_table_data_layout(self.summary_table, [150, 170, 170, 120, 58, 100, 220])
-
-    def _set_steps_table_empty_layout(self) -> None:
-        set_table_empty_layout(self.steps_table)
-
-    def _set_steps_table_data_layout(self) -> None:
-        set_table_data_layout(self.steps_table, [60, 120, 120, 130, 110, 110])
-
     def _set_results_empty_state(self, is_empty: bool) -> None:
         stack = self.results_empty_stack
         if stack is None:
@@ -599,21 +901,19 @@ class GradientMethodsWindow(QMainWindow):
         self.run_button.setText("Считаю..." if busy else "Рассчитать")
 
     @staticmethod
-    def _format_result_status(success: bool) -> str:
-        return "успешно" if success else "не удалось"
-
-    @staticmethod
     def _format_stop_reason(stop_reason: str) -> str:
         labels = {
             "timeout": "таймаут",
-            "gradient_norm_reached": "достигнут критерий по норме градиента",
-            "no_improving_step": "улучшающий шаг не найден",
+            "gradient_norm_reached": "достигнута требуемая точность",
+            "no_improving_step": "не найден улучшающий шаг",
             "max_iterations_reached": "достигнут лимит итераций",
         }
         return labels.get(stop_reason, "неизвестная причина")
 
     def _update_formula_preview(self, raw_expression: str) -> None:
         expression = raw_expression.strip() or "—"
+        if self._active_preset_key == "custom" and raw_expression.strip():
+            self._custom_expression_cache = raw_expression.strip()
         readable = expression.replace("**", "^").replace("*", "·")
         self.formula_preview.setText(f"F(x<sub>1</sub>, x<sub>2</sub>) = <code>{readable}</code>")
 

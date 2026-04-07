@@ -6,7 +6,14 @@ import math
 
 import pytest
 
-from lr3.domain.expression import ExpressionError, compile_objective
+from lr3.application.services import DEFAULT_CONJUGATE_EXPRESSION, DEFAULT_GRADIENT_EXPRESSION
+from lr3.domain.expression import (
+    ExpressionError,
+    analyze_local_extremum,
+    build_gradient_formula,
+    build_hessian_formula,
+    compile_objective,
+)
 
 
 def test_compile_objective_happy_path_supports_variables_functions_and_operations() -> None:
@@ -15,6 +22,88 @@ def test_compile_objective_happy_path_supports_variables_functions_and_operation
     value = objective((4.0, -3.0))
 
     assert value == pytest.approx(12.0)
+
+
+@pytest.mark.parametrize(
+    ("expression", "expected_gradient"),
+    (
+        (
+            "x1**2 + x2**2 - x1*x2 + x1 - 2*x2",
+            ("2 * x1 - x2 + 1", "2 * x2 - x1 - 2"),
+        ),
+        (
+            "-2 - x1 - 2*x2 - 0.1*x1**2 - 100*x2**2",
+            ("-1 - 0.2 * x1", "-2 - 200 * x2"),
+        ),
+    ),
+)
+def test_build_gradient_formula_returns_readable_symbolic_gradient(
+    expression: str,
+    expected_gradient: tuple[str, str],
+) -> None:
+    assert build_gradient_formula(expression) == expected_gradient
+
+
+@pytest.mark.parametrize(
+    ("expression", "expected_hessian"),
+    (
+        (
+            DEFAULT_GRADIENT_EXPRESSION,
+            (("2", "-1"), ("-1", "2")),
+        ),
+        (
+            DEFAULT_CONJUGATE_EXPRESSION,
+            (("-0.2", "0"), ("0", "-200")),
+        ),
+    ),
+)
+def test_build_hessian_formula_returns_readable_symbolic_matrix(
+    expression: str,
+    expected_hessian: tuple[tuple[str, str], tuple[str, str]],
+) -> None:
+    assert build_hessian_formula(expression) == expected_hessian
+
+
+def test_analyze_local_extremum_reports_quadratic_minimum_for_maximization_task() -> None:
+    analysis = analyze_local_extremum(DEFAULT_GRADIENT_EXPRESSION, (0.0, 0.0), goal="max")
+
+    assert analysis.gradient_formula == ("2 * x1 - x2 + 1", "2 * x2 - x1 - 2")
+    assert analysis.gradient_at_start == pytest.approx((1.0, -2.0))
+    assert len(analysis.stationary_points) == 1
+    assert analysis.stationary_points[0] == pytest.approx((0.0, 1.0))
+    assert analysis.stationary_gradient == pytest.approx((0.0, 0.0))
+    assert analysis.hessian_at_stationary_point is not None
+    assert analysis.hessian_at_stationary_point[0] == pytest.approx((2.0, -1.0))
+    assert analysis.hessian_at_stationary_point[1] == pytest.approx((-1.0, 2.0))
+    assert analysis.stationary_point_kind == "локальный минимум"
+    assert "не согласуется" in analysis.goal_alignment
+    assert "локальным минимумом" in analysis.theory_conclusion
+
+
+def test_analyze_local_extremum_reports_quadratic_maximum_for_matching_task() -> None:
+    analysis = analyze_local_extremum(DEFAULT_CONJUGATE_EXPRESSION, (1.0, 1.0), goal="max")
+
+    assert analysis.gradient_formula == ("-1 - 0.2 * x1", "-2 - 200 * x2")
+    assert analysis.gradient_at_start == pytest.approx((-1.2, -202.0))
+    assert len(analysis.stationary_points) == 1
+    assert analysis.stationary_points[0] == pytest.approx((-5.0, -0.01))
+    assert analysis.stationary_gradient == pytest.approx((0.0, 0.0))
+    assert analysis.hessian_at_stationary_point is not None
+    assert analysis.hessian_at_stationary_point[0] == pytest.approx((-0.2, 0.0))
+    assert analysis.hessian_at_stationary_point[1] == pytest.approx((0.0, -200.0))
+    assert analysis.stationary_point_kind == "локальный максимум"
+    assert "согласуется" in analysis.goal_alignment
+    assert "локальным максимумом" in analysis.theory_conclusion
+
+
+def test_analyze_local_extremum_limits_strict_conclusion_for_general_nonlinear_function() -> None:
+    analysis = analyze_local_extremum("sin(x1) + x2", (0.0, 0.0), goal="max")
+
+    assert analysis.stationary_points == ()
+    assert analysis.stationary_gradient is None
+    assert analysis.hessian_at_stationary_point is None
+    assert analysis.stationary_point_kind == "стационарная точка не найдена"
+    assert "ограничен" in analysis.strictness_note
 
 
 @pytest.mark.parametrize(

@@ -131,6 +131,23 @@ def build_dark_qt_base_styles(tokens: DarkQtThemeTokens) -> str:
                 padding: 0 6px;
                 color: {tokens.group_title_color};
             }}
+            QGroupBox#ReportCard {{
+                background: #171c26;
+                border: 1px solid #36425a;
+            }}
+            QGroupBox#IterationCard {{
+                background: #141923;
+                border: 1px solid #40506b;
+            }}
+            QLabel[role="report-caption"] {{
+                color: #9ca8bc;
+                font-size: 12px;
+                font-weight: 700;
+            }}
+            QLabel[role="report-value"] {{
+                color: #f2f5fa;
+                font-size: 14px;
+            }}
             QPushButton {{
                 background: {tokens.button_bg};
                 border: 1px solid {tokens.button_border};

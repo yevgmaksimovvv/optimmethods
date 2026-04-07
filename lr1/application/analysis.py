@@ -14,9 +14,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 from lr1.domain.models import GridRunResult, InputConfig, ReferencePoint, SkippedRun
 from lr1.domain.numerical import is_better
 from lr1.domain.search import METHOD_ORDER, METHOD_SPECS
-from lr1.infrastructure.logging import configure_logging
 
-configure_logging()
 logger = logging.getLogger("lr1.analysis")
 
 def resolve_method_keys(method_key: str) -> Tuple[str, ...]:

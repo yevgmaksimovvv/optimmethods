@@ -27,6 +27,7 @@ class ServiceMetrics:
     latency_ms: float
     success: bool
 
+
 def parse_int(value: str, field_name: str) -> int:
     """Безопасный парсинг целого параметра."""
     try:

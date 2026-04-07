@@ -13,9 +13,6 @@ import logging
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Tuple
 
-from lr1.infrastructure.logging import configure_logging
-
-configure_logging()
 logger = logging.getLogger("lr1.app_models")
 
 
@@ -219,21 +216,4 @@ class RunReport:
             self.interval_raw,
             self.interval,
             self.reference_point is not None,
-        )
-
-
-@dataclass
-class AppState:
-    """Минимальное состояние GUI между действиями пользователя."""
-    last_report: Optional[RunReport] = None
-    busy: bool = False
-    selected_table_method: str = ""
-    selected_grid_run_index: int = 0
-
-    def __post_init__(self) -> None:
-        logger.debug(
-            "AppState created busy=%s selected_table_method=%s selected_grid_run_index=%d",
-            self.busy,
-            self.selected_table_method,
-            self.selected_grid_run_index,
         )

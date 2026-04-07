@@ -73,6 +73,30 @@ def test_conjugate_gradient_ascent_converges_to_peak() -> None:
     assert result.optimum_value == pytest.approx(0.0, abs=1e-2)
 
 
+def test_conjugate_gradient_history_carries_step_metadata() -> None:
+    def objective(point: Point2D) -> float:
+        x1, x2 = point
+        return -(x1 - 3.0) ** 2 - 2.0 * (x2 - 4.0) ** 2
+
+    result = conjugate_gradient_ascent(objective, (0.0, 0.0), _config(initial_step=0.2))
+
+    record = result.records[0]
+
+    assert record.direction is not None
+    assert record.beta is not None
+    assert record.next_point is not None
+    assert record.next_value is not None
+    assert record.restart_direction in {False, True}
+    assert record.direction == pytest.approx(record.gradient)
+    assert record.next_point == pytest.approx(
+        (
+            record.point[0] + record.step_size * record.direction[0],
+            record.point[1] + record.step_size * record.direction[1],
+        )
+    )
+    assert record.next_value == pytest.approx(objective(record.next_point))
+
+
 def test_gradient_ascent_stops_at_iteration_limit() -> None:
     def objective(point: Point2D) -> float:
         x1, x2 = point
@@ -109,4 +133,3 @@ def test_gradient_ascent_times_out_on_slow_objective() -> None:
     assert result.iterations_count == 1
     assert len(result.records) == 1
     assert math.isfinite(result.optimum_value)
-

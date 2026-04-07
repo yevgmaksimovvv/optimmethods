@@ -18,6 +18,7 @@
 - [ЛР1](docs/lr1.md)
 - [ЛР2](docs/lr2.md)
 - [ЛР3](docs/lr3.md)
+- [Архитектурный контракт](docs/architecture.md)
 
 ## Режимы запуска
 

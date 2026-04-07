@@ -65,14 +65,14 @@ from lr1.application.services import (
     run_batch,
 )
 from lr1.domain.functions import FUNCTION_TEMPLATE_SPECS
-from lr1.domain.models import AppState, GridRunResult, InputConfig, RunReport
+from lr1.domain.models import GridRunResult, InputConfig, RunReport
 from lr1.domain.search import METHOD_SPECS
-from lr1.infrastructure.logging import configure_logging, get_log_file_path
+from lr1.infrastructure.logging import get_log_file_path
 from lr1.infrastructure.settings import DEFAULT_INPUT_EPS, DEFAULT_INTERVAL, DEFAULT_L
 from lr1.ui.plotting import build_grid_plot_figure, build_plot_figure
+from lr1.ui.state import AppState
 from lr1.ui.tabs import IterationsTab, PlotTab, SummaryTab
 
-configure_logging()
 logger = logging.getLogger("lr1.gui")
 
 APP_TITLE = "ЛР1 — Методы одномерной оптимизации"

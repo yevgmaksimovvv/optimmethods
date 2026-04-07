@@ -31,9 +31,7 @@ from lr1.domain.models import (
 )
 from lr1.domain.numerical import sanitize_interval, scaled_interval_shift
 from lr1.domain.search import METHOD_SPECS
-from lr1.infrastructure.logging import configure_logging
 
-configure_logging()
 logger = logging.getLogger("lr1.app_service")
 
 
