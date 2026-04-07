@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 
 Point2D = tuple[float, float]
 Hessian2D = tuple[tuple[float, float], tuple[float, float]]
+Goal = Literal["min", "max"]
 
 
 @dataclass(frozen=True)
@@ -17,6 +19,7 @@ class MethodConfig:
     initial_step: float
     min_step: float
     timeout_seconds: float
+    goal: Goal
     gradient_step: float
     max_step_expansions: int
 

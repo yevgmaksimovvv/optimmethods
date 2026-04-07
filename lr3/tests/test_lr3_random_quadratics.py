@@ -26,12 +26,13 @@ class QuadraticCase:
     start_point: Point2D
 
 
-def _config() -> MethodConfig:
+def _config(*, goal: str) -> MethodConfig:
     return build_config(
         epsilon_raw="1e-6",
         max_iterations_raw="450",
         initial_step_raw="0.1",
         timeout_raw="3.0",
+        goal_raw=goal,
         gradient_step_raw="1e-6",
         max_step_expansions_raw="18",
     )
@@ -154,7 +155,7 @@ def test_random_quadratic_max_cases_converge_with_gradient_ascent(case: Quadrati
     _assert_analytical_block(case, goal="max")
     analysis = analyze_local_extremum(case.expression, case.start_point, goal="max")
     objective = compile_objective(case.expression)
-    config = _config()
+    config = _config(goal="max")
 
     result, metrics = run_gradient(case.expression, case.start_point, config)
 
@@ -176,7 +177,7 @@ def test_random_quadratic_max_cases_converge_with_conjugate_gradient(case: Quadr
     _assert_analytical_block(case, goal="max")
     analysis = analyze_local_extremum(case.expression, case.start_point, goal="max")
     objective = compile_objective(case.expression)
-    config = _config()
+    config = _config(goal="max")
 
     result, metrics = run_conjugate(case.expression, case.start_point, config)
 
@@ -204,6 +205,50 @@ def test_random_quadratic_min_cases_are_classified_correctly(case: QuadraticCase
     assert analysis_min.goal_alignment.startswith("Постановка на поиск минимума согласуется")
     assert analysis_max.stationary_point_kind == "локальный минимум"
     assert "не согласуется" in analysis_max.goal_alignment
+
+
+@pytest.mark.parametrize("case", MIN_CASES, ids=lambda case: case.name)
+def test_random_quadratic_min_cases_converge_with_gradient_descent(case: QuadraticCase) -> None:
+    _assert_analytical_block(case, goal="min")
+    analysis = analyze_local_extremum(case.expression, case.start_point, goal="min")
+    objective = compile_objective(case.expression)
+    config = _config(goal="min")
+
+    result, metrics = run_gradient(case.expression, case.start_point, config)
+
+    assert metrics.success is True
+    assert result.success
+    assert result.method_name == "gradient_ascent"
+    assert len(result.records) == result.iterations_count
+    assert result.iterations_count > 0
+    assert any(record.step_size > 0.0 for record in result.records)
+    assert analysis.stationary_point_kind == "локальный минимум"
+    assert "согласуется" in analysis.goal_alignment
+    assert result.optimum_point == pytest.approx(case.stationary_point, abs=5e-3)
+    assert result.optimum_value == pytest.approx(objective(case.stationary_point), abs=1e-4)
+    assert math.hypot(result.records[-1].gradient[0], result.records[-1].gradient[1]) <= 1e-5
+
+
+@pytest.mark.parametrize("case", MIN_CASES, ids=lambda case: case.name)
+def test_random_quadratic_min_cases_converge_with_conjugate_descent(case: QuadraticCase) -> None:
+    _assert_analytical_block(case, goal="min")
+    analysis = analyze_local_extremum(case.expression, case.start_point, goal="min")
+    objective = compile_objective(case.expression)
+    config = _config(goal="min")
+
+    result, metrics = run_conjugate(case.expression, case.start_point, config)
+
+    assert metrics.success is True
+    assert result.success
+    assert result.method_name == "conjugate_gradient_ascent"
+    assert len(result.records) == result.iterations_count
+    assert result.iterations_count > 0
+    assert any(record.step_size > 0.0 for record in result.records)
+    assert analysis.stationary_point_kind == "локальный минимум"
+    assert "согласуется" in analysis.goal_alignment
+    assert result.optimum_point == pytest.approx(case.stationary_point, abs=5e-3)
+    assert result.optimum_value == pytest.approx(objective(case.stationary_point), abs=1e-4)
+    assert math.hypot(result.records[-1].gradient[0], result.records[-1].gradient[1]) <= 1e-5
 
 
 @pytest.mark.parametrize("case", SADDLE_CASES, ids=lambda case: case.name)

@@ -17,6 +17,7 @@ def _config(
     max_iterations: int = 250,
     initial_step: float = 0.1,
     timeout_seconds: float = 2.0,
+    goal: str = "max",
     min_step: float = 1e-8,
     gradient_step: float = 1e-6,
     max_step_expansions: int = 16,
@@ -27,6 +28,7 @@ def _config(
         initial_step=initial_step,
         min_step=min_step,
         timeout_seconds=timeout_seconds,
+        goal=goal,
         gradient_step=gradient_step,
         max_step_expansions=max_step_expansions,
     )
@@ -69,6 +71,34 @@ def test_conjugate_gradient_ascent_converges_to_peak() -> None:
     assert result.records[0].point == pytest.approx(start_point)
     assert any(record.step_size > 0.0 for record in result.records)
     assert math.isfinite(result.optimum_value)
+    assert result.optimum_point == pytest.approx((3.0, 4.0), abs=5e-1)
+    assert result.optimum_value == pytest.approx(0.0, abs=1e-2)
+
+
+def test_gradient_ascent_supports_minimum_goal() -> None:
+    def objective(point: Point2D) -> float:
+        x1, x2 = point
+        return (x1 - 1.0) ** 2 + 2.0 * (x2 + 2.0) ** 2
+
+    start_point: Point2D = (7.0, -9.0)
+
+    result = gradient_ascent(objective, start_point, _config(goal="min"))
+
+    assert result.success
+    assert result.stop_reason == "gradient_norm_reached"
+    assert result.optimum_point == pytest.approx((1.0, -2.0), abs=5e-1)
+    assert result.optimum_value == pytest.approx(0.0, abs=1e-2)
+
+
+def test_conjugate_gradient_ascent_supports_minimum_goal() -> None:
+    def objective(point: Point2D) -> float:
+        x1, x2 = point
+        return (x1 - 3.0) ** 2 + 2.0 * (x2 - 4.0) ** 2
+
+    result = conjugate_gradient_ascent(objective, (0.0, 0.0), _config(initial_step=0.2, goal="min"))
+
+    assert result.success
+    assert result.stop_reason == "gradient_norm_reached"
     assert result.optimum_point == pytest.approx((3.0, 4.0), abs=5e-1)
     assert result.optimum_value == pytest.approx(0.0, abs=1e-2)
 

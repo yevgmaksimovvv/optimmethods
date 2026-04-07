@@ -21,6 +21,7 @@ from optim_core.ui import (
     configure_two_panel_splitter,
     create_choice_chip_grid,
     create_controls_panel,
+    configure_data_table,
     create_parameter_grid,
     create_primary_action_button,
     create_results_workspace,
@@ -28,6 +29,7 @@ from optim_core.ui import (
     create_standard_group,
     dark_plot_context,
 )
+from optim_core.parsing import parse_localized_float
 from PySide6.QtCore import Qt  # type: ignore[import-not-found]
 from PySide6.QtWidgets import (  # type: ignore[import-not-found]
     QApplication,
@@ -35,20 +37,21 @@ from PySide6.QtWidgets import (  # type: ignore[import-not-found]
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
-    QLineEdit,
     QMainWindow,
     QMessageBox,
     QScrollArea,
     QSizePolicy,
     QSplitter,
+    QTableWidget,
+    QTableWidgetItem,
+    QLineEdit,
     QVBoxLayout,
     QWidget,
 )
 
 from lr3.application.services import (
-    DEFAULT_CONJUGATE_EXPRESSION,
-    DEFAULT_GRADIENT_EXPRESSION,
     ServiceMetrics,
     build_config,
     build_start_point,
@@ -56,30 +59,44 @@ from lr3.application.services import (
     run_gradient,
 )
 from lr3.domain.expression import analyze_local_extremum, compile_objective
-from lr3.domain.models import ExtremumAnalysis, IterationRecord, MethodConfig, OptimizationResult, Point2D
+from lr3.domain.models import ExtremumAnalysis, Goal, IterationRecord, MethodConfig, OptimizationResult, Point2D
 
 APP_TITLE = "ЛР3 — Градиентные методы"
+
+FUNCTION_TERMS: tuple[tuple[str, tuple[int, int]], ...] = (
+    ("1", (0, 0)),
+    ("x₁", (1, 0)),
+    ("x₂", (0, 1)),
+    ("x₁²", (2, 0)),
+    ("x₁x₂", (1, 1)),
+    ("x₂²", (0, 2)),
+)
 
 FUNCTION_PRESET_CONFIGS = {
     "gradient": {
         "label": "Градиентная",
         "tooltip": "Функция из задания для метода первого порядка.",
-        "expression": DEFAULT_GRADIENT_EXPRESSION,
+        "coefficients": (0.0, 1.0, -2.0, 1.0, -1.0, 1.0),
         "method": "gradient",
+        "goal": "min",
     },
     "conjugate": {
-        "label": "Сопряжённых градиентов",
+        "label": "Сопр. градиенты",
         "tooltip": "Функция из задания для метода сопряжённых градиентов.",
-        "expression": DEFAULT_CONJUGATE_EXPRESSION,
+        "coefficients": (-2.0, -1.0, -2.0, -0.1, 0.0, -100.0),
         "method": "conjugate",
+        "goal": "max",
     },
     "custom": {
         "label": "Пользовательская",
-        "tooltip": "Своя функция. Выражение можно редактировать вручную.",
-        "expression": None,
+        "tooltip": "Своя функция. Коэффициенты можно редактировать вручную.",
+        "coefficients": None,
         "method": None,
+        "goal": None,
     },
 }
+
+GOAL_OPTIONS = (("Минимум", "min"), ("Максимум", "max"))
 
 METHOD_DEFAULTS = {
     "gradient": {
@@ -88,7 +105,6 @@ METHOD_DEFAULTS = {
         "step": "0.1",
         "eps": "1e-6",
         "iters": "1000",
-        "timeout": "3.0",
     },
     "conjugate": {
         "x1": "1",
@@ -96,9 +112,13 @@ METHOD_DEFAULTS = {
         "step": "0.2",
         "eps": "1e-6",
         "iters": "300",
-        "timeout": "3.0",
     },
 }
+
+DEFAULT_TIMEOUT_SECONDS = "3.0"
+DEFAULT_MIN_STEP = "1e-8"
+DEFAULT_GRADIENT_STEP = "1e-6"
+DEFAULT_MAX_STEP_EXPANSIONS = "16"
 
 
 @dataclass(frozen=True)
@@ -125,7 +145,8 @@ class GradientMethodsWindow(QMainWindow):
         self._run_task.succeeded.connect(self._on_run_succeeded)
         self._run_task.failed.connect(self._on_run_failed)
         self._active_preset_key = "gradient"
-        self._custom_expression_cache = DEFAULT_GRADIENT_EXPRESSION
+        self._custom_coefficients_cache = FUNCTION_PRESET_CONFIGS["gradient"]["coefficients"]
+        self._updating_coefficients = False
 
         root = QWidget()
         root_layout = QVBoxLayout(root)
@@ -157,6 +178,8 @@ class GradientMethodsWindow(QMainWindow):
         self._apply_preset("gradient")
         self.method_buttons["gradient"].setChecked(True)
         self._set_method_defaults("gradient", True)
+        self.goal_buttons["min"].setChecked(True)
+        self._set_goal_defaults("min", True)
         self._set_results_empty_state(True)
         self._clear_plot()
 
@@ -188,24 +211,89 @@ class GradientMethodsWindow(QMainWindow):
                     tab_selected_border="#647596",
                 )
             )
+            + build_choice_chip_styles()
             + """
             QLineEdit {
-                min-height: 24px;
+                min-height: 23px;
+                font-size: 12px;
+                padding: 4px 8px;
+            }
+            QLabel#SectionCaption {
+                font-size: 10px;
+            }
+            QLabel[role="parameter-label"] {
+                font-size: 13px;
+                font-weight: 600;
+            }
+            QLabel[role="formula-preview"] {
+                min-height: 72px;
+                text-align: center;
+                padding: 10px 12px;
+                font-family: "Cambria Math", "Times New Roman", serif;
+                font-size: 15px;
+                font-weight: 700;
+                background: #101722;
+                border: 1px solid #31425a;
+                border-radius: 10px;
+            }
+            QLabel[role="report-caption"] {
+                line-height: 1.2;
+                font-size: 11px;
+            }
+            QLabel[role="report-value"] {
+                font-size: 12px;
+                line-height: 1.2;
+            }
+            QGroupBox#ReportCard,
+            QGroupBox#IterationCard {
+                padding-top: 12px;
+            }
+            QPushButton[role="choice-chip"] {
+                min-height: 25px;
+                padding: 4px 8px;
+                border-radius: 8px;
+                background: #243045;
+                border: 1px solid #3e4c68;
+                font-size: 11px;
+                font-weight: 600;
+            }
+            QPushButton[role="choice-chip"]:checked {
+                background: #1f63bf;
+                border-color: #3474cc;
+            }
+            QTableWidget#CoefficientTable {
+                background: #131824;
+                border: 1px solid #3f4a62;
+                border-radius: 8px;
+                gridline-color: #2d3241;
+                color: #f5f7fb;
+                font-size: 12px;
+            }
+            QTableWidget#CoefficientTable::item {
+                padding: 2px 4px;
+            }
+            QTableWidget#CoefficientTable QHeaderView::section {
+                background: #222938;
+                color: #dbe2ee;
+                border-right: 1px solid #33415b;
+                border-bottom: 1px solid #33415b;
+                padding: 4px 6px;
+                font-size: 10px;
+                font-weight: 700;
             }
             QSplitter::handle {
                 background: #2a3549;
                 border-radius: 3px;
             }
             """
-            + build_choice_chip_styles()
         )
 
     def _build_controls_panel(self) -> QWidget:
-        controls: ControlsPanel = create_controls_panel(min_width=500, max_width=560, spacing=12)
+        controls: ControlsPanel = create_controls_panel(min_width=490, max_width=540, spacing=7)
         panel = controls.panel
         layout = controls.layout
 
-        basic_group, basic_layout = create_standard_group("Основные")
+        basic_group, basic_layout = create_standard_group("Основные", spacing=4, margins=(12, 12, 12, 10))
         preset_caption = QLabel("Пресет функции")
         preset_caption.setObjectName("SectionCaption")
         basic_layout.addWidget(preset_caption)
@@ -217,29 +305,45 @@ class GradientMethodsWindow(QMainWindow):
             group=self.preset_group,
             options=tuple((FUNCTION_PRESET_CONFIGS[key]["label"], key) for key in preset_keys),
             columns=3,
-            horizontal_spacing=6,
-            vertical_spacing=6,
+            horizontal_spacing=3,
+            vertical_spacing=3,
             on_clicked=self._on_preset_selected,
             tooltips={key: FUNCTION_PRESET_CONFIGS[key]["tooltip"] for key in preset_keys},
         )
         self.preset_buttons = {key: button for key, button in zip(preset_keys, preset_buttons, strict=True)}
         basic_layout.addWidget(preset_row)
 
-        expression_caption = QLabel("Формула")
-        expression_caption.setObjectName("SectionCaption")
-        basic_layout.addWidget(expression_caption)
+        coeff_caption = QLabel("Коэффициенты функции")
+        coeff_caption.setObjectName("SectionCaption")
+        basic_layout.addWidget(coeff_caption)
 
-        self.expression_input = QLineEdit()
-        self.expression_input.setPlaceholderText("Например: -(x1-1)^2 - 2*(x2+3)^2")
-        self.expression_input.textChanged.connect(self._update_formula_preview)
-        basic_layout.addWidget(self.expression_input)
+        self.coefficient_table = QTableWidget(len(FUNCTION_TERMS), 2)
+        self.coefficient_table.setObjectName("CoefficientTable")
+        self.coefficient_table.setHorizontalHeaderLabels(["Член", "Коэффициент"])
+        configure_data_table(
+            self.coefficient_table,
+            min_row_height=28,
+            allow_selection=False,
+            allow_editing=True,
+            word_wrap=False,
+        )
+        self.coefficient_table.verticalHeader().setVisible(False)
+        self.coefficient_table.horizontalHeader().setDefaultAlignment(Qt.AlignCenter)
+        self.coefficient_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.coefficient_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        self.coefficient_table.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.coefficient_table.setMinimumHeight(204)
+        self.coefficient_table.setMaximumHeight(220)
+        self.coefficient_table.itemChanged.connect(self._on_coefficient_item_changed)
+        self._configure_coefficient_table()
+        basic_layout.addWidget(self.coefficient_table)
 
         self.formula_preview = QLabel()
         self.formula_preview.setProperty("role", "formula-preview")
-        self.formula_preview.setTextFormat(Qt.RichText)
+        self.formula_preview.setTextFormat(Qt.PlainText)
         self.formula_preview.setWordWrap(True)
         self.formula_preview.setAlignment(Qt.AlignCenter)
-        self.formula_preview.setMinimumHeight(74)
+        self.formula_preview.setMinimumHeight(76)
         basic_layout.addWidget(self.formula_preview)
 
         method_caption = QLabel("Метод")
@@ -251,31 +355,51 @@ class GradientMethodsWindow(QMainWindow):
         method_keys = ("gradient", "conjugate")
         method_row, method_buttons = create_choice_chip_grid(
             group=self.method_group,
-            options=(("Градиентный", "gradient"), ("Сопряжённые градиенты", "conjugate")),
+            options=(("Градиентный", "gradient"), ("Сопр. градиенты", "conjugate")),
             columns=2,
+            horizontal_spacing=3,
+            vertical_spacing=3,
             on_clicked=self._set_method_defaults,
         )
         self.method_buttons = {key: button for key, button in zip(method_keys, method_buttons, strict=True)}
         basic_layout.addWidget(method_row)
 
+        goal_caption = QLabel("Цель")
+        goal_caption.setObjectName("SectionCaption")
+        basic_layout.addWidget(goal_caption)
+
+        self.goal_group = QButtonGroup(self)
+        self.goal_group.setExclusive(True)
+        goal_row, goal_buttons = create_choice_chip_grid(
+            group=self.goal_group,
+            options=GOAL_OPTIONS,
+            columns=2,
+            horizontal_spacing=3,
+            vertical_spacing=3,
+            on_clicked=self._set_goal_defaults,
+        )
+        self.goal_buttons = {key: button for key, button in zip(("min", "max"), goal_buttons, strict=True)}
+        basic_layout.addWidget(goal_row)
+
         self.start_x1_input = QLineEdit()
         self.start_x2_input = QLineEdit()
         self.epsilon_input = QLineEdit()
-        self.max_iterations_input = QLineEdit()
         self.initial_step_input = QLineEdit()
-        self.timeout_input = QLineEdit()
-        self.min_step_input = QLineEdit()
-        self.gradient_step_input = QLineEdit()
-        self.max_step_expansions_input = QLineEdit()
+
+        start_caption = QLabel("Стартовая точка")
+        start_caption.setObjectName("SectionCaption")
+        basic_layout.addWidget(start_caption)
 
         start_row = QWidget()
         start_layout = QHBoxLayout(start_row)
         start_layout.setContentsMargins(0, 0, 0, 0)
-        start_layout.setSpacing(10)
-        start_x1_caption = QLabel("x1")
+        start_layout.setSpacing(6)
+        start_x1_caption = QLabel("x₁")
         start_x1_caption.setObjectName("SectionCaption")
-        start_x2_caption = QLabel("x2")
+        start_x2_caption = QLabel("x₂")
         start_x2_caption.setObjectName("SectionCaption")
+        self.start_x1_input.setMinimumWidth(88)
+        self.start_x2_input.setMinimumWidth(88)
         start_layout.addWidget(start_x1_caption)
         start_layout.addWidget(self.start_x1_input, 1)
         start_layout.addWidget(start_x2_caption)
@@ -287,17 +411,7 @@ class GradientMethodsWindow(QMainWindow):
         advanced_layout = create_parameter_grid(advanced_group)
 
         add_parameter_row(advanced_layout, row=0, label="Точность ε", control=self.epsilon_input)
-        add_parameter_row(advanced_layout, row=1, label="Лимит итераций", control=self.max_iterations_input)
-        add_parameter_row(advanced_layout, row=2, label="Начальный шаг", control=self.initial_step_input)
-        add_parameter_row(advanced_layout, row=3, label="Таймаут (сек)", control=self.timeout_input)
-        add_parameter_row(advanced_layout, row=4, label="Мин. шаг", control=self.min_step_input)
-        add_parameter_row(advanced_layout, row=5, label="Шаг градиента", control=self.gradient_step_input)
-        add_parameter_row(
-            advanced_layout,
-            row=6,
-            label="Лимит расширений шага",
-            control=self.max_step_expansions_input,
-        )
+        add_parameter_row(advanced_layout, row=1, label="Начальный шаг", control=self.initial_step_input)
 
         self.run_button = create_primary_action_button(text="Рассчитать", on_click=self._run_clicked)
 
@@ -384,23 +498,28 @@ class GradientMethodsWindow(QMainWindow):
     def _on_preset_selected(self, preset_key: str, checked: bool = True) -> None:
         if not checked:
             return
+        if self._active_preset_key == "custom" and preset_key != "custom":
+            self._custom_coefficients_cache = self._read_coefficients()
         self._active_preset_key = preset_key
+        self._invalidate_current_result()
         for key, button in self.preset_buttons.items():
             button.setChecked(key == preset_key)
         self._apply_preset(preset_key)
 
     def _apply_preset(self, preset_key: str) -> None:
         preset = FUNCTION_PRESET_CONFIGS[preset_key]
-        expression = preset["expression"]
-        is_custom = expression is None
-        self.expression_input.setReadOnly(not is_custom)
-        if expression is not None:
-            self.expression_input.setText(expression)
-        else:
-            self.expression_input.setText(self._custom_expression_cache)
+        coefficients = preset["coefficients"]
+        if coefficients is None:
+            coefficients = self._custom_coefficients_cache
+        self._set_coefficients(coefficients)
+        self.coefficient_table.setEnabled(preset_key == "custom")
+        self._update_formula_preview()
         if preset["method"] is not None:
             self.method_buttons[preset["method"]].setChecked(True)
             self._set_method_defaults(preset["method"], True)
+        if preset["goal"] is not None:
+            self.goal_buttons[preset["goal"]].setChecked(True)
+            self._set_goal_defaults(preset["goal"], True)
 
     def _set_method_defaults(self, method: str, checked: bool = True) -> None:
         if not checked:
@@ -410,12 +529,13 @@ class GradientMethodsWindow(QMainWindow):
         self.start_x2_input.setText(config["x2"])
         self.initial_step_input.setText(config["step"])
         self.epsilon_input.setText(config["eps"])
-        self.max_iterations_input.setText(config["iters"])
-        self.timeout_input.setText(config["timeout"])
-        self.min_step_input.setText("1e-8")
-        self.gradient_step_input.setText("1e-6")
-        self.max_step_expansions_input.setText("16")
-        self._update_formula_preview(self.expression_input.text())
+        self._update_formula_preview()
+
+    def _set_goal_defaults(self, goal: str, checked: bool = True) -> None:
+        if not checked:
+            return
+        self._invalidate_current_result()
+        self._update_formula_preview()
 
     def _run_clicked(self) -> None:
         if self._run_task.is_running():
@@ -424,22 +544,24 @@ class GradientMethodsWindow(QMainWindow):
         if method is None:
             QMessageBox.critical(self, "Ошибка ввода", "Выбери метод оптимизации.")
             return
+        expression = self._current_expression()
 
         self._set_busy(True)
         self._run_task.start(
             "lr3-run",
             lambda: self._run_method(
                 method=method,
-                expression=self.expression_input.text().strip(),
+                expression=expression,
                 x1_raw=self.start_x1_input.text(),
                 x2_raw=self.start_x2_input.text(),
                 epsilon_raw=self.epsilon_input.text(),
-                max_iterations_raw=self.max_iterations_input.text(),
+                max_iterations_raw=self._selected_method_iterations(),
                 initial_step_raw=self.initial_step_input.text(),
-                timeout_raw=self.timeout_input.text(),
-                min_step_raw=self.min_step_input.text(),
-                gradient_step_raw=self.gradient_step_input.text(),
-                max_step_expansions_raw=self.max_step_expansions_input.text(),
+                timeout_raw=DEFAULT_TIMEOUT_SECONDS,
+                goal_raw=self._selected_goal(),
+                min_step_raw=DEFAULT_MIN_STEP,
+                gradient_step_raw=DEFAULT_GRADIENT_STEP,
+                max_step_expansions_raw=DEFAULT_MAX_STEP_EXPANSIONS,
             ),
         )
 
@@ -454,6 +576,7 @@ class GradientMethodsWindow(QMainWindow):
         max_iterations_raw: str,
         initial_step_raw: str,
         timeout_raw: str,
+        goal_raw: str,
         min_step_raw: str,
         gradient_step_raw: str,
         max_step_expansions_raw: str,
@@ -467,6 +590,7 @@ class GradientMethodsWindow(QMainWindow):
             max_iterations_raw=max_iterations_raw,
             initial_step_raw=initial_step_raw,
             timeout_raw=timeout_raw,
+            goal_raw=goal_raw,
             min_step_raw=min_step_raw,
             gradient_step_raw=gradient_step_raw,
             max_step_expansions_raw=max_step_expansions_raw,
@@ -501,7 +625,7 @@ class GradientMethodsWindow(QMainWindow):
 
         result = payload.result
         objective = compile_objective(payload.expression)
-        analysis = analyze_local_extremum(payload.expression, result.start_point, goal="max")
+        analysis = analyze_local_extremum(payload.expression, result.start_point, goal=payload.config.goal)
 
         self.report_layout.addWidget(
             self._build_task_card(
@@ -529,8 +653,8 @@ class GradientMethodsWindow(QMainWindow):
         card, form = self._create_report_card("Постановка задачи")
         method_title = self._format_method_title(result.method_name)
         self._add_report_row(form, "Метод", self._math_text(method_title))
-        self._add_report_row(form, "Цель", self._math_text("Поиск максимума"))
-        self._add_report_row(form, "Функция", self._math_text(f"F(x1, x2) = {self._format_formula(payload.expression)}"))
+        self._add_report_row(form, "Цель", self._math_text(self._format_goal_task(payload.config.goal)))
+        self._add_report_row(form, "Функция", self._math_text(f"F(x<sub>1</sub>, x<sub>2</sub>) = {self._format_formula(payload.expression)}"))
         self._add_report_row(form, "M<sub>0</sub>", self._math_text(self._format_point(result.start_point)))
         return card
 
@@ -540,48 +664,43 @@ class GradientMethodsWindow(QMainWindow):
         analysis: ExtremumAnalysis,
     ) -> QWidget:
         card, form = self._create_report_card("Аналитическая подготовка")
-        self._add_report_row(form, "Исходная функция", self._math_text(f"F(x1, x2) = {self._format_formula(analysis.expression)}"))
-        self._add_report_row(form, "Начальная точка", self._math_text(self._format_point(analysis.start_point)))
         self._add_report_row(
             form,
-            "Общий градиент",
+            "∇f(x<sub>1</sub>, x<sub>2</sub>)",
             self._math_text(
-                f"∇f(x<sub>1</sub>, x<sub>2</sub>) = ({self._format_formula(analysis.gradient_formula[0])}; {self._format_formula(analysis.gradient_formula[1])})"
+                self._format_expression_block(
+                    "",
+                    (
+                        f"∂f/∂x<sub>1</sub> = {self._format_formula(analysis.gradient_formula[0])}",
+                        f"∂f/∂x<sub>2</sub> = {self._format_formula(analysis.gradient_formula[1])}",
+                    ),
+                )
             ),
         )
         self._add_report_row(
             form,
             "∇f(M<sub>0</sub>)",
-            self._math_text(f"({self._format_scalar(analysis.gradient_at_start[0])}; {self._format_scalar(analysis.gradient_at_start[1])})"),
+            self._math_text(
+                self._format_vector_block(
+                    analysis.gradient_at_start,
+                    scalar_formatter=self._format_scalar,
+                )
+            ),
         )
         if analysis.stationary_points:
             self._add_report_row(
                 form,
-                "Решение ∇f(x) = 0",
+                "M*",
                 self._math_text(self._format_stationary_points(analysis.stationary_points)),
             )
-            if analysis.stationary_gradient is not None:
-                self._add_report_row(
-                    form,
-                    "∇f(M<sub>*</sub>)",
-                    self._math_text(
-                        f"({self._format_scalar(analysis.stationary_gradient[0])}; {self._format_scalar(analysis.stationary_gradient[1])})"
-                    ),
-                )
         else:
-            self._add_report_row(form, "Решение ∇f(x) = 0", self._math_text("строгий аналитический поиск стационарной точки не выполнен"))
-        self._add_report_row(form, "Матрица Гессе", self._math_text(self._format_matrix(analysis.hessian_formula)))
-        if analysis.hessian_at_stationary_point is not None:
-            self._add_report_row(
-                form,
-                "H(M<sub>*</sub>)",
-                self._math_text(self._format_matrix(analysis.hessian_at_stationary_point, scalar_formatter=self._format_scalar)),
-            )
-        else:
-            self._add_report_row(form, "H(M<sub>*</sub>)", self._math_text("не вычислена"))
-        self._add_report_row(form, "Вывод", self._math_text(analysis.theory_conclusion))
-        self._add_report_row(form, "Согласование", self._math_text(analysis.goal_alignment))
-        self._add_report_row(form, "Ограничение", self._math_text(analysis.strictness_note))
+            self._add_report_row(form, "M*", self._math_text("не выделена"))
+        self._add_report_row(
+            form,
+            "H",
+            self._math_text(self._format_matrix_block(analysis.hessian_formula)),
+        )
+        self._add_report_row(form, "Вывод", self._math_text(self._build_analysis_conclusion(analysis)))
         return card
 
     def _build_iteration_cards(self, payload: RunPayload, objective: Callable[[Point2D], float]) -> list[QWidget]:
@@ -595,9 +714,15 @@ class GradientMethodsWindow(QMainWindow):
     def _build_gradient_iteration_cards(self, payload: RunPayload, objective: Callable[[Point2D], float]) -> list[QWidget]:
         result = payload.result
         cards: list[QWidget] = []
+        direction_multiplier = -1.0 if payload.config.goal == "min" else 1.0
         for record in result.records:
             has_step = record.step_size > 0.0
-            new_point = self._translate_point(record.point, record.gradient, record.step_size) if has_step else None
+            step_direction = (
+                (direction_multiplier * record.gradient[0], direction_multiplier * record.gradient[1])
+                if has_step
+                else None
+            )
+            new_point = self._translate_point(record.point, step_direction, record.step_size) if step_direction is not None else None
             new_value = objective(new_point) if new_point is not None else None
             note = self._gradient_step_note(record.step_size, payload.config.initial_step, result)
             card, form = self._create_report_card(f"Итерация {record.k + 1}", object_name="IterationCard")
@@ -605,16 +730,17 @@ class GradientMethodsWindow(QMainWindow):
             self._add_report_row(form, "F(M<sub>k</sub>)", self._math_text(self._format_scalar(record.value)))
             self._add_report_row(
                 form,
-                "∇f(M<sub>k</sub>)",
-                self._math_text(f"({self._format_scalar(record.gradient[0])}; {self._format_scalar(record.gradient[1])})"),
+                "∇F(M<sub>k</sub>)",
+                self._math_text(self._format_vector_block(record.gradient, scalar_formatter=self._format_scalar)),
             )
             self._add_report_row(form, "h<sub>k</sub>", self._math_text(self._format_step(record.step_size)))
             if new_point is not None and new_value is not None:
+                operator = "+" if payload.config.goal == "max" else "-"
                 self._add_report_row(
                     form,
                     f"M<sub>{record.k + 1}</sub>",
                     self._math_text(
-                        f"M<sub>{record.k + 1}</sub> = M<sub>{record.k}</sub> + h<sub>{record.k}</sub>·∇f(M<sub>{record.k}</sub>) = {self._format_point(new_point)}"
+                        f"M<sub>{record.k + 1}</sub> = M<sub>{record.k}</sub> {operator} h<sub>{record.k}</sub>·∇f(M<sub>{record.k}</sub>) = {self._format_point(new_point)}"
                     ),
                 )
                 self._add_report_row(
@@ -638,16 +764,14 @@ class GradientMethodsWindow(QMainWindow):
             self._add_report_row(form, "F(M<sub>k</sub>)", self._math_text(self._format_scalar(record.value)))
             self._add_report_row(
                 form,
-                "∇f(M<sub>k</sub>)",
-                self._math_text(f"({self._format_scalar(record.gradient[0])}; {self._format_scalar(record.gradient[1])})"),
+                "∇F(M<sub>k</sub>)",
+                self._math_text(self._format_vector_block(record.gradient, scalar_formatter=self._format_scalar)),
             )
             if record.direction is not None:
                 self._add_report_row(
                     form,
                     "s<sub>k</sub>",
-                    self._math_text(
-                        f"({self._format_scalar(record.direction[0])}; {self._format_scalar(record.direction[1])})"
-                    ),
+                    self._math_text(self._format_vector_block(record.direction, scalar_formatter=self._format_scalar)),
                 )
             if record.beta is not None:
                 self._add_report_row(form, "β<sub>k</sub>", self._math_text(self._format_scalar(record.beta)))
@@ -678,11 +802,12 @@ class GradientMethodsWindow(QMainWindow):
 
     def _build_summary_card(self, payload: RunPayload, analysis: ExtremumAnalysis) -> QWidget:
         result = payload.result
-        card, form = self._create_report_card("Итоговый вывод")
-        self._add_report_row(form, "Требовалось найти", self._math_text("поиск максимума"))
-        self._add_report_row(form, "Теория", self._math_text(analysis.stationary_point_kind))
+        card, form = self._create_report_card("Итог")
+        self._add_report_row(form, "Нужно было найти", self._math_text(self._format_goal_task(payload.config.goal)))
+        self._add_report_row(form, "Аналитика", self._math_text(analysis.stationary_point_kind))
         self._add_report_row(form, "Согласование", self._math_text(analysis.goal_alignment))
-        self._add_report_row(form, "Численный статус", self._math_text(self._format_success_text(result.success)))
+        self._add_report_row(form, "Численный метод", self._math_text(self._format_method_goal_conclusion(payload.config.goal, result.success, analysis.goal_alignment)))
+        self._add_report_row(form, "Статус метода", self._math_text(self._format_success_text(result.success)))
         self._add_report_row(form, "Найденная точка", self._math_text(self._format_point(result.optimum_point)))
         self._add_report_row(form, "F(x*)", self._math_text(self._format_scalar(result.optimum_value)))
         self._add_report_row(form, "Итераций", self._math_text(str(result.iterations_count)))
@@ -702,10 +827,12 @@ class GradientMethodsWindow(QMainWindow):
     def _create_report_card(self, title: str, *, object_name: str = "ReportCard") -> tuple[QGroupBox, QFormLayout]:
         card = QGroupBox(title)
         card.setObjectName(object_name)
-        card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         card_layout = QFormLayout(card)
         card_layout.setLabelAlignment(Qt.AlignLeft | Qt.AlignTop)
         card_layout.setFormAlignment(Qt.AlignTop)
+        card_layout.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        card_layout.setRowWrapPolicy(QFormLayout.WrapLongRows)
         card_layout.setHorizontalSpacing(16)
         card_layout.setVerticalSpacing(8)
         card_layout.setContentsMargins(16, 14, 16, 14)
@@ -722,6 +849,7 @@ class GradientMethodsWindow(QMainWindow):
         value_label.setTextFormat(Qt.RichText)
         value_label.setWordWrap(True)
         value_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        value_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         form.addRow(caption_label, value_label)
 
     @staticmethod
@@ -768,6 +896,26 @@ class GradientMethodsWindow(QMainWindow):
         return labels.get(method_name, method_name)
 
     @staticmethod
+    def _format_goal_task(goal: Goal) -> str:
+        return "Поиск минимума" if goal == "min" else "Поиск максимума"
+
+    @staticmethod
+    def _format_goal_target(goal: Goal) -> str:
+        return "минимума" if goal == "min" else "максимума"
+
+    @staticmethod
+    def _format_goal_direction(goal: Goal) -> str:
+        return "к минимуму" if goal == "min" else "к максимуму"
+
+    @staticmethod
+    def _format_method_goal_conclusion(goal: Goal, success: bool, goal_alignment: str) -> str:
+        if success and "не согласуется" not in goal_alignment:
+            return f"сходится {GradientMethodsWindow._format_goal_direction(goal)}"
+        if success:
+            return f"сошёлся, но цель {GradientMethodsWindow._format_goal_target(goal)} аналитикой не подтверждена"
+        return "остановлен без подтверждения искомого экстремума"
+
+    @staticmethod
     def _format_success_text(success: bool) -> str:
         return "метод завершился успешно" if success else "расчёт остановлен"
 
@@ -802,28 +950,201 @@ class GradientMethodsWindow(QMainWindow):
         return formatted
 
     @staticmethod
-    def _format_matrix(
-        matrix: tuple[tuple[str, str], tuple[str, str]] | tuple[tuple[float, float], tuple[float, float]],
+    def _math_text(text: str) -> str:
+        return (
+            "<div style=\"font-family: 'Cambria Math', 'Times New Roman', serif; "
+            "font-size: 12px; line-height: 1.18; font-weight: 500; white-space: normal;\">"
+            f"{text}"
+            "</div>"
+        )
+
+    @staticmethod
+    def _format_expression_block(title: str, expressions: tuple[str, ...]) -> str:
+        body = "".join(
+            f"<div style=\"padding-left: 12px;\">{expression}</div>" for expression in expressions
+        )
+        return f"<div style=\"line-height: 1.35;\">{title}{body}</div>"
+
+    @staticmethod
+    def _format_vector_block(
+        vector: tuple[object, ...],
         *,
         scalar_formatter: Callable[[float], str] | None = None,
     ) -> str:
-        formatter = scalar_formatter or (lambda value: value if isinstance(value, str) else str(value))
-        first_row = " ; ".join(formatter(value) for value in matrix[0])
-        second_row = " ; ".join(formatter(value) for value in matrix[1])
-        return f"[[{first_row}]; [{second_row}]]"
+        formatter = scalar_formatter or GradientMethodsWindow._format_scalar
+        values = ", ".join(GradientMethodsWindow._format_math_value(value, formatter) for value in vector)
+        return f"({values})"
 
     @staticmethod
-    def _math_text(text: str) -> str:
-        return f"<span style=\"font-family: 'Consolas', 'SF Mono', monospace;\">{text}</span>"
+    def _format_matrix_block(
+        matrix: tuple[tuple[object, ...], ...],
+        *,
+        scalar_formatter: Callable[[float], str] | None = None,
+    ) -> str:
+        formatter = scalar_formatter or GradientMethodsWindow._format_scalar
+        rows = [
+            "<tr>"
+            + "".join(
+                f"<td style=\"padding: 0 8px; text-align: center;\">"
+                f"{GradientMethodsWindow._format_math_value(value, formatter)}</td>"
+                for value in row
+            )
+            + "</tr>"
+            for row in matrix
+        ]
+        return (
+            "<table style=\"border-collapse: collapse; margin: 0;\">"
+            + "".join(rows)
+            + "</table>"
+        )
+
+    @staticmethod
+    def _format_math_value(value: object, numeric_formatter: Callable[[float], str]) -> str:
+        if isinstance(value, str):
+            return GradientMethodsWindow._format_formula(value)
+        return numeric_formatter(float(value))
+
+    @staticmethod
+    def _build_analysis_conclusion(analysis: ExtremumAnalysis) -> str:
+        parts: list[str] = ["<div>Вывод:</div>"]
+        if analysis.stationary_points:
+            marker = GradientMethodsWindow._format_stationary_points(analysis.stationary_points)
+            if analysis.stationary_point_kind == "локальный минимум":
+                parts.append(f"<div>Локальный минимум: {marker}.</div>")
+            elif analysis.stationary_point_kind == "локальный максимум":
+                parts.append(f"<div>Локальный максимум: {marker}.</div>")
+            elif analysis.stationary_point_kind == "седловая точка":
+                parts.append(f"<div>Седловая точка: {marker}.</div>")
+            else:
+                parts.append(f"<div>Искомый экстремум: {marker}.</div>")
+        else:
+            parts.append("<div>Искомый экстремум для выбранной цели отсутствует.</div>")
+
+        parts.append(f"<div>Классификация: {html.escape(analysis.stationary_point_kind)}</div>")
+        parts.append(f"<div>Согласование: {html.escape(analysis.goal_alignment)}</div>")
+        parts.append(f"<div>{html.escape(analysis.theory_conclusion)}</div>")
+        parts.append(f"<div>{html.escape(analysis.strictness_note)}</div>")
+        return "".join(parts)
+
+    def _configure_coefficient_table(self) -> None:
+        self.coefficient_table.blockSignals(True)
+        try:
+            for row, (label, _) in enumerate(FUNCTION_TERMS):
+                term_item = QTableWidgetItem(label)
+                term_item.setFlags(Qt.ItemIsEnabled)
+                term_item.setTextAlignment(Qt.AlignCenter)
+                self.coefficient_table.setItem(row, 0, term_item)
+
+                cell = QTableWidgetItem("0")
+                cell.setTextAlignment(Qt.AlignCenter)
+                self.coefficient_table.setItem(row, 1, cell)
+        finally:
+            self.coefficient_table.blockSignals(False)
+
+    def _set_coefficients(self, coefficients: tuple[float, ...]) -> None:
+        self._updating_coefficients = True
+        self.coefficient_table.blockSignals(True)
+        try:
+            for row, value in enumerate(coefficients):
+                item = self.coefficient_table.item(row, 1)
+                if item is None:
+                    item = QTableWidgetItem()
+                    item.setTextAlignment(Qt.AlignCenter)
+                    self.coefficient_table.setItem(row, 1, item)
+                item.setText(self._format_scalar(value))
+                item.setTextAlignment(Qt.AlignCenter)
+        finally:
+            self.coefficient_table.blockSignals(False)
+            self._updating_coefficients = False
+
+    def _read_coefficients(self) -> tuple[float, ...]:
+        coefficients: list[float] = []
+        for row in range(self.coefficient_table.rowCount()):
+            item = self.coefficient_table.item(row, 1)
+            raw = item.text().strip() if item and item.text().strip() else "0"
+            coefficients.append(parse_localized_float(raw, f"c[{row}]"))
+        return tuple(coefficients)
+
+    def _on_coefficient_item_changed(self, _item: QTableWidgetItem) -> None:
+        if self._updating_coefficients or _item.column() != 1:
+            return
+        if self._active_preset_key == "custom":
+            self._custom_coefficients_cache = self._read_coefficients()
+        self._update_formula_preview()
+        self._invalidate_current_result()
+
+    def _build_expression_from_coefficients(self, coefficients: tuple[float, ...]) -> str:
+        terms: list[str] = []
+        for value, (_, powers) in zip(coefficients, FUNCTION_TERMS, strict=True):
+            if abs(value) < 1e-14:
+                continue
+            terms.append(self._build_expression_term(value, powers))
+        return " + ".join(terms).replace("+ -", "- ") if terms else "0"
+
+    def _build_expression_term(self, value: float, powers: tuple[int, int]) -> str:
+        sign = "-" if value < 0 else ""
+        abs_value = abs(value)
+        coeff_text = self._format_scalar(abs_value)
+        if powers == (0, 0):
+            return f"{sign}{coeff_text}"
+        factors: list[str] = []
+        if abs_value != 1.0:
+            factors.append(coeff_text)
+        if powers[0] > 0:
+            factors.append("x1" if powers[0] == 1 else f"x1**{powers[0]}")
+        if powers[1] > 0:
+            factors.append("x2" if powers[1] == 1 else f"x2**{powers[1]}")
+        return f"{sign}{'*'.join(factors)}"
+
+    def _format_polynomial_display(self, coefficients: tuple[float, ...]) -> str:
+        terms: list[str] = []
+        for value, (label, _) in zip(coefficients, FUNCTION_TERMS, strict=True):
+            if abs(value) < 1e-14:
+                continue
+            terms.append(self._format_display_term(value, label))
+        return " + ".join(terms).replace("+ -", "- ") if terms else "0"
+
+    @staticmethod
+    def _format_display_term(value: float, label: str) -> str:
+        abs_value = abs(value)
+        coeff_text = GradientMethodsWindow._format_scalar(abs_value)
+        if label == "1":
+            return f"-{coeff_text}" if value < 0 else coeff_text
+        if abs_value == 1.0:
+            return f"-{label}" if value < 0 else label
+        return f"-{coeff_text}{label}" if value < 0 else f"{coeff_text}{label}"
+
+    def _build_formula_preview_text(self, coefficients: tuple[float, ...]) -> str:
+        display = self._format_polynomial_display(coefficients)
+        return f"F(x₁, x₂) = {display}"
+
+    def _current_expression(self) -> str:
+        return self._build_expression_from_coefficients(self._read_coefficients())
+
+    def _invalidate_current_result(self) -> None:
+        self._last_payload = None
+        self._clear_report()
+        self._clear_plot()
+        self._set_results_empty_state(True)
+
+    def _update_formula_preview(self) -> None:
+        coefficients = self._read_coefficients()
+        if self._active_preset_key == "custom" and not self._updating_coefficients:
+            self._custom_coefficients_cache = coefficients
+        self.formula_preview.setText(self._build_formula_preview_text(coefficients))
 
     def _render_plot(self, payload: RunPayload) -> None:
         objective = compile_objective(payload.expression)
         result = payload.result
+        goal = payload.config.goal
+        goal_label = self._format_goal_target(goal)
+        analysis = analyze_local_extremum(payload.expression, result.start_point, goal=goal)
 
         self.plot_state_label.hide()
         self.plot_context_label.setText(
-            f"Метод: {self._format_method_title(result.method_name)} | Итераций: {result.iterations_count} | "
-            f"Причина завершения: {self._format_stop_reason(result.stop_reason)}"
+            f"Цель: поиск {goal_label} | Метод: {self._format_method_title(result.method_name)} | "
+            f"Итераций: {result.iterations_count} | Причина завершения: {self._format_stop_reason(result.stop_reason)} | "
+            f"Аналитика: {analysis.goal_alignment}"
         )
         self.plot_context_label.show()
 
@@ -860,8 +1181,24 @@ class GradientMethodsWindow(QMainWindow):
             figure.colorbar(contour, ax=ax_contour)
             ax_contour.plot(xs, ys, "r.-", linewidth=2, markersize=6)
             ax_contour.scatter([xs[0]], [ys[0]], c="white", edgecolors="black", label="start")
-            ax_contour.scatter([result.optimum_point[0]], [result.optimum_point[1]], c="red", label="optimum")
-            ax_contour.set_title("Траектория на линии уровня")
+            ax_contour.scatter(
+                [result.optimum_point[0]],
+                [result.optimum_point[1]],
+                c="#ff8c42" if goal == "max" else "#4fc3f7",
+                label=f"итог ({goal_label})",
+            )
+            if analysis.stationary_points:
+                theoretical = analysis.stationary_points[0]
+                ax_contour.scatter(
+                    [theoretical[0]],
+                    [theoretical[1]],
+                    c="white",
+                    edgecolors="black",
+                    marker="*",
+                    s=160,
+                    label=f"M* ({analysis.stationary_point_kind})",
+                )
+            ax_contour.set_title(f"Траектория поиска {goal_label} на линии уровня")
             ax_contour.set_xlabel("x1")
             ax_contour.set_ylabel("x2")
             ax_contour.legend()
@@ -870,7 +1207,7 @@ class GradientMethodsWindow(QMainWindow):
             if not values:
                 values = [result.optimum_value]
             ax_convergence.plot(range(len(values)), values, "b-o", linewidth=2, markersize=4)
-            ax_convergence.set_title("Сходимость")
+            ax_convergence.set_title(f"Сходимость при поиске {goal_label}")
             ax_convergence.set_xlabel("k")
             ax_convergence.set_ylabel("F(x)")
             ax_convergence.grid(True, alpha=0.3)
@@ -910,13 +1247,17 @@ class GradientMethodsWindow(QMainWindow):
         }
         return labels.get(stop_reason, "неизвестная причина")
 
-    def _update_formula_preview(self, raw_expression: str) -> None:
-        expression = raw_expression.strip() or "—"
-        if self._active_preset_key == "custom" and raw_expression.strip():
-            self._custom_expression_cache = raw_expression.strip()
-        readable = expression.replace("**", "^").replace("*", "·")
-        self.formula_preview.setText(f"F(x<sub>1</sub>, x<sub>2</sub>) = <code>{readable}</code>")
+    def _selected_goal(self) -> str:
+        for goal, button in self.goal_buttons.items():
+            if button.isChecked():
+                return goal
+        return "max"
 
+    def _selected_method_iterations(self) -> str:
+        method = self._selected_method()
+        if method is None:
+            return METHOD_DEFAULTS["gradient"]["iters"]
+        return METHOD_DEFAULTS[method]["iters"]
 
 def main() -> None:
     app = QApplication.instance() or QApplication(sys.argv)

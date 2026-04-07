@@ -6,7 +6,7 @@ import math
 import time
 from collections.abc import Callable
 
-from lr3.domain.models import IterationRecord, MethodConfig, OptimizationResult, Point2D
+from lr3.domain.models import Goal, IterationRecord, MethodConfig, OptimizationResult, Point2D
 
 ObjectiveFn = Callable[[Point2D], float]
 
@@ -35,15 +35,20 @@ def _dot(a: Point2D, b: Point2D) -> float:
     return a[0] * b[0] + a[1] * b[1]
 
 
-def _maximize_line_search(
+def _goal_multiplier(goal: Goal) -> float:
+    return 1.0 if goal == "max" else -1.0
+
+
+def _line_search(
     objective: ObjectiveFn,
     point: Point2D,
     direction: Point2D,
     initial_step: float,
     min_step: float,
     expand_limit: int,
+    maximize: bool,
 ) -> tuple[Point2D, float, float, bool]:
-    """Линейный поиск шага для максимизации вдоль направления."""
+    """Линейный поиск шага вдоль направления для max/min цели."""
     current_value = objective(point)
     best_point = point
     best_value = current_value
@@ -53,7 +58,7 @@ def _maximize_line_search(
     for _ in range(max(expand_limit, 1)):
         candidate = _add(point, direction, step)
         candidate_value = objective(candidate)
-        if candidate_value > best_value:
+        if (maximize and candidate_value > best_value) or (not maximize and candidate_value < best_value):
             best_point = candidate
             best_value = candidate_value
             best_step = step
@@ -68,7 +73,7 @@ def _maximize_line_search(
     while step >= min_step:
         candidate = _add(point, direction, step)
         candidate_value = objective(candidate)
-        if candidate_value > current_value:
+        if (maximize and candidate_value > current_value) or (not maximize and candidate_value < current_value):
             return candidate, candidate_value, step, True
         step /= 2.0
 
@@ -80,10 +85,12 @@ def gradient_ascent(
     start_point: Point2D,
     config: MethodConfig,
 ) -> OptimizationResult:
-    """Градиентный подъем с адаптивным выбором шага."""
+    """Градиентный метод с адаптивным выбором шага для max/min цели."""
     started = time.perf_counter()
     point = start_point
     records: list[IterationRecord] = []
+    multiplier = _goal_multiplier(config.goal)
+    maximize = config.goal == "max"
 
     for k in range(config.max_iterations):
         if (time.perf_counter() - started) > config.timeout_seconds:
@@ -115,13 +122,15 @@ def gradient_ascent(
                 stop_reason="gradient_norm_reached",
             )
 
-        new_point, new_value, step_size, improved = _maximize_line_search(
+        direction = (multiplier * gradient[0], multiplier * gradient[1])
+        new_point, new_value, step_size, improved = _line_search(
             objective=objective,
             point=point,
-            direction=gradient,
+            direction=direction,
             initial_step=config.initial_step,
             min_step=config.min_step,
             expand_limit=config.max_step_expansions,
+            maximize=maximize,
         )
 
         records[-1] = IterationRecord(
@@ -164,11 +173,14 @@ def conjugate_gradient_ascent(
     start_point: Point2D,
     config: MethodConfig,
 ) -> OptimizationResult:
-    """Нелинейный метод сопряжённых градиентов (Fletcher-Reeves) для максимизации."""
+    """Нелинейный метод сопряжённых градиентов (Fletcher-Reeves) для max/min цели."""
     started = time.perf_counter()
     point = start_point
+    multiplier = _goal_multiplier(config.goal)
+    maximize = config.goal == "max"
     gradient = finite_difference_gradient(objective, point, config.gradient_step)
-    direction = gradient
+    signed_gradient = (multiplier * gradient[0], multiplier * gradient[1])
+    direction = signed_gradient
     records: list[IterationRecord] = []
 
     for k in range(config.max_iterations):
@@ -186,6 +198,7 @@ def conjugate_gradient_ascent(
 
         current_point = point
         current_gradient = gradient
+        current_signed_gradient = signed_gradient
         current_direction = direction
         value = objective(current_point)
         grad_norm = _vector_norm(current_gradient)
@@ -212,13 +225,14 @@ def conjugate_gradient_ascent(
                 stop_reason="gradient_norm_reached",
             )
 
-        new_point, new_value, step_size, improved = _maximize_line_search(
+        new_point, new_value, step_size, improved = _line_search(
             objective=objective,
             point=current_point,
             direction=current_direction,
             initial_step=config.initial_step,
             min_step=config.min_step,
             expand_limit=config.max_step_expansions,
+            maximize=maximize,
         )
 
         if not improved:
@@ -248,13 +262,14 @@ def conjugate_gradient_ascent(
             )
 
         new_gradient = finite_difference_gradient(objective, new_point, config.gradient_step)
-        denominator = max(_dot(current_gradient, current_gradient), 1e-14)
-        beta = _dot(new_gradient, new_gradient) / denominator
-        updated_direction = _add(new_gradient, current_direction, beta)
+        signed_gradient = (multiplier * new_gradient[0], multiplier * new_gradient[1])
+        denominator = max(_dot(current_signed_gradient, current_signed_gradient), 1e-14)
+        beta = _dot(signed_gradient, signed_gradient) / denominator
+        updated_direction = _add(signed_gradient, current_direction, beta)
         restart = False
 
-        if _dot(updated_direction, new_gradient) <= 0:
-            updated_direction = new_gradient
+        if _dot(updated_direction, signed_gradient) <= 0:
+            updated_direction = signed_gradient
             restart = True
 
         records.append(
@@ -274,6 +289,7 @@ def conjugate_gradient_ascent(
 
         point = new_point
         gradient = new_gradient
+        signed_gradient = (multiplier * gradient[0], multiplier * gradient[1])
         direction = updated_direction
         _ = new_value
 

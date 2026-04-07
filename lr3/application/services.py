@@ -6,12 +6,13 @@ import logging
 import time
 import uuid
 from dataclasses import dataclass
+from typing import cast
 
 from optim_core.parsing import parse_localized_float
 
 from lr3.domain.expression import ExpressionError, compile_objective
 from lr3.domain.methods import conjugate_gradient_ascent, gradient_ascent
-from lr3.domain.models import MethodConfig, OptimizationResult, Point2D
+from lr3.domain.models import Goal, MethodConfig, OptimizationResult, Point2D
 
 logger = logging.getLogger("lr3.service")
 
@@ -49,6 +50,7 @@ def build_config(
     max_iterations_raw: str,
     initial_step_raw: str,
     timeout_raw: str,
+    goal_raw: str,
     min_step_raw: str = "1e-8",
     gradient_step_raw: str = "1e-6",
     max_step_expansions_raw: str = "16",
@@ -58,6 +60,7 @@ def build_config(
     max_iterations = parse_int(max_iterations_raw, "max_iterations")
     initial_step = parse_localized_float(initial_step_raw, "initial_step")
     timeout_seconds = parse_localized_float(timeout_raw, "timeout_seconds")
+    goal = _parse_goal(goal_raw)
     min_step = parse_localized_float(min_step_raw, "min_step")
     gradient_step = parse_localized_float(gradient_step_raw, "gradient_step")
     max_step_expansions = parse_int(max_step_expansions_raw, "max_step_expansions")
@@ -83,6 +86,7 @@ def build_config(
         initial_step=initial_step,
         min_step=min_step,
         timeout_seconds=timeout_seconds,
+        goal=goal,
         gradient_step=gradient_step,
         max_step_expansions=max_step_expansions,
     )
@@ -140,3 +144,10 @@ def _run(
         result.stop_reason,
     )
     return result, metrics
+
+
+def _parse_goal(value: str) -> Goal:
+    goal = value.strip().lower()
+    if goal not in {"min", "max"}:
+        raise ValueError("goal должен быть min или max")
+    return cast(Goal, goal)
