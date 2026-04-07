@@ -52,6 +52,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QSizePolicy,
     QSplitter,
+    QTabWidget,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -225,6 +226,8 @@ class RosenbrockWindow(QMainWindow):
         self._active_preset_key = "variant_f1"
         self._solver_mode = "continuous"
         self._plot_mode: str = "contour"
+        self.results_tabs: QTabWidget | None = None
+        self.results_tab_indexes = None
         self._epsilon_row: DynamicSeriesInputRow | None = None
         self._start_row: DynamicSeriesInputRow | None = None
         self._delta_step_input: QLineEdit | None = None
@@ -521,10 +524,13 @@ class RosenbrockWindow(QMainWindow):
             tables_empty_hint="Нажми «Рассчитать», чтобы получить результаты и графики.",
         )
         panel = workspace.panel
+        self.results_tabs = workspace.tabs
+        self.results_tab_indexes = workspace.tab_indexes
         table_content_layout = workspace.tables_layout
         self.results_tab_stack = workspace.tables_empty_stack
         if self.results_tab_stack is None:
             raise RuntimeError("Ожидался EmptyStateStack для вкладки таблиц")
+        self.results_tabs.currentChanged.connect(self._on_results_tab_changed)
 
         summary_group = QGroupBox("Результаты расчёта")
         summary_layout = QVBoxLayout(summary_group)
@@ -555,6 +561,10 @@ class RosenbrockWindow(QMainWindow):
 
         steps_group = QGroupBox("Итерации")
         steps_layout = QVBoxLayout(steps_group)
+        self.steps_state_label = QLabel("Выберите запуск, чтобы увидеть итерации.")
+        self.steps_state_label.setObjectName("SectionHint")
+        self.steps_state_label.setWordWrap(True)
+        steps_layout.addWidget(self.steps_state_label)
         self.steps_table = QTableWidget(0, 10)
         self.steps_header = MathHeaderView(Qt.Horizontal, self.steps_table)
         self.steps_table.setHorizontalHeader(self.steps_header)
@@ -769,8 +779,22 @@ class RosenbrockWindow(QMainWindow):
         self._selected_run_index = run_index
         run = self._batch_result.runs[run_index]
         if sync_table_selection:
-            self.summary_table.selectRow(run_index)
-        self._fill_steps_table(run)
+            self.summary_table.blockSignals(True)
+            try:
+                self.summary_table.selectRow(run_index)
+            finally:
+                self.summary_table.blockSignals(False)
+        self._show_run_details(run)
+
+    def _show_run_details(self, run: SolverResult) -> None:
+        if run.steps:
+            self.steps_state_label.hide()
+            self._fill_steps_table(run)
+        else:
+            self.steps_table.setRowCount(0)
+            self._set_steps_table_empty_layout()
+            self.steps_state_label.setText("У выбранного запуска нет сохранённой истории итераций.")
+            self.steps_state_label.show()
         self._draw_run_plot(self._batch_result, run)
 
     def _fill_summary_table(self, batch_result: BatchResult) -> None:
@@ -898,6 +922,15 @@ class RosenbrockWindow(QMainWindow):
             return
         self._select_run(selected_indexes[0].row(), sync_table_selection=False)
 
+    def _on_results_tab_changed(self, index: int) -> None:
+        if self._batch_result is None or self._selected_run_index is None or self.results_tab_indexes is None:
+            return
+        if index == self.results_tab_indexes.plot:
+            run = self._batch_result.runs[self._selected_run_index]
+            self._draw_run_plot(self._batch_result, run)
+        elif index == self.results_tab_indexes.results:
+            self._select_run(self._selected_run_index, sync_table_selection=True)
+
     def _on_plot_mode_selected(self, mode_key: str, checked: bool = True) -> None:
         if not checked:
             return
@@ -960,11 +993,12 @@ class RosenbrockWindow(QMainWindow):
                 item.setTextAlignment(Qt.AlignCenter)
                 self.steps_table.setItem(row_idx, col_idx, item)
         self._set_steps_table_data_layout()
+        self.steps_state_label.hide()
 
     def _draw_run_plot(self, batch_result: BatchResult, run: SolverResult) -> None:
         points = np.array(run.trajectory)
-        if points.ndim != 2 or points.shape[1] != 2:
-            self._clear_plot()
+        if points.ndim != 2 or points.shape[1] != 2 or points.size == 0:
+            self._clear_plot(message="У выбранного запуска нет данных для графика.")
             return
         x_vals = points[:, 0]
         y_vals = points[:, 1]
@@ -1058,7 +1092,7 @@ class RosenbrockWindow(QMainWindow):
                 for text in legend.get_texts():
                     text.set_color("#e8f0ff")
 
-        self.canvas.draw_idle()
+        self.canvas.draw()
 
     def _save_artifacts(self, batch_result: BatchResult, trace_id: str) -> Path:
         run_dir = self._create_artifacts_dir(trace_id)
@@ -1240,10 +1274,10 @@ class RosenbrockWindow(QMainWindow):
         clipped = np.clip(np.nan_to_num(mesh_z, nan=0.0, posinf=high, neginf=low), low, high)
         return clipped
 
-    def _clear_plot(self) -> None:
+    def _clear_plot(self, message: str = "Выберите запуск из таблицы, чтобы увидеть графики") -> None:
         clear_plot_canvas(
             self.canvas,
-            message="Выберите запуск из таблицы, чтобы увидеть графики",
+            message=message,
         )
 
     @staticmethod
