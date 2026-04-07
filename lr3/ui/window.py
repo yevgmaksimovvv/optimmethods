@@ -148,80 +148,7 @@ class GradientMethodsWindow(QMainWindow):
             )
             + """
             QLineEdit {
-                background: #131824;
-                border: 1px solid #3f4a62;
-                border-radius: 8px;
-                padding: 7px 10px;
-                color: #f5f7fb;
-                selection-background-color: #2379ff;
                 min-height: 24px;
-            }
-            QLineEdit:focus { border: 1px solid #2f8fff; }
-            QLabel[role="parameter-label"] {
-                color: #dce6f5;
-                font-size: 15px;
-                font-weight: 600;
-            }
-            QLabel#SectionCaption {
-                color: #9aa5bb;
-                font-size: 12px;
-                font-weight: 700;
-                letter-spacing: 0.04em;
-                text-transform: uppercase;
-            }
-            QLabel[role="formula-preview"] {
-                background: #101827;
-                border: 1px solid #304665;
-                border-radius: 12px;
-                padding: 10px 14px;
-                color: #ecf3ff;
-                font-size: 18px;
-                font-weight: 700;
-            }
-            QLabel#SummaryEmptyTitle {
-                color: #eef2f8;
-                font-size: 22px;
-                font-weight: 700;
-            }
-            QLabel#SummaryEmptyText {
-                color: #b8c1d1;
-                font-size: 15px;
-            }
-            QLabel#SectionHint {
-                color: #a8b1c3;
-                font-size: 12px;
-            }
-            QWidget#SummaryEmptyCard {
-                background: #181b24;
-                border: 1px solid #31384a;
-                border-radius: 14px;
-            }
-            QTableWidget {
-                background: #12161d;
-                border: 1px solid #464b59;
-                border-radius: 8px;
-                color: #f5f7fb;
-                gridline-color: #2d3241;
-                selection-background-color: #2a6df4;
-                alternate-background-color: #151b25;
-                font-family: "SF Mono", "Menlo", "Consolas", monospace;
-                font-size: 14px;
-            }
-            QHeaderView::section {
-                background: #222938;
-                color: #dbe2ee;
-                border: 0;
-                border-right: 1px solid #33415b;
-                border-bottom: 1px solid #33415b;
-                padding: 6px 8px;
-                font-size: 12px;
-                font-weight: 700;
-            }
-            QTableCornerButton::section {
-                background: #222938;
-                border: 0;
-                border-right: 1px solid #33415b;
-                border-bottom: 1px solid #33415b;
             }
             QSplitter::handle {
                 background: #2a3549;
@@ -236,15 +163,15 @@ class GradientMethodsWindow(QMainWindow):
         panel = controls.panel
         layout = controls.layout
 
-        objective_group, objective_layout = create_standard_group("Целевая функция")
-        expression_caption = QLabel("F(x1, x2)")
+        basic_group, basic_layout = create_standard_group("Основные")
+        expression_caption = QLabel("Формула")
         expression_caption.setObjectName("SectionCaption")
-        objective_layout.addWidget(expression_caption)
+        basic_layout.addWidget(expression_caption)
 
         self.expression_input = QLineEdit()
         self.expression_input.setPlaceholderText("Например: -(x1-1)^2 - 2*(x2+3)^2")
         self.expression_input.textChanged.connect(self._update_formula_preview)
-        objective_layout.addWidget(self.expression_input)
+        basic_layout.addWidget(self.expression_input)
 
         self.formula_preview = QLabel()
         self.formula_preview.setProperty("role", "formula-preview")
@@ -252,12 +179,11 @@ class GradientMethodsWindow(QMainWindow):
         self.formula_preview.setWordWrap(True)
         self.formula_preview.setAlignment(Qt.AlignCenter)
         self.formula_preview.setMinimumHeight(74)
-        objective_layout.addWidget(self.formula_preview)
+        basic_layout.addWidget(self.formula_preview)
 
-        method_group, method_layout = create_standard_group("Метод")
-        method_caption = QLabel("Выбор метода")
+        method_caption = QLabel("Метод")
         method_caption.setObjectName("SectionCaption")
-        method_layout.addWidget(method_caption)
+        basic_layout.addWidget(method_caption)
 
         self.method_group = QButtonGroup(self)
         self.method_group.setExclusive(True)
@@ -269,10 +195,7 @@ class GradientMethodsWindow(QMainWindow):
             on_clicked=self._set_method_defaults,
         )
         self.method_buttons = {key: button for key, button in zip(method_keys, method_buttons, strict=True)}
-        method_layout.addWidget(method_row)
-
-        params_group = QGroupBox("Параметры")
-        params_layout = create_parameter_grid(params_group)
+        basic_layout.addWidget(method_row)
 
         self.start_x1_input = QLineEdit()
         self.start_x2_input = QLineEdit()
@@ -297,25 +220,28 @@ class GradientMethodsWindow(QMainWindow):
         start_layout.addWidget(start_x2_caption)
         start_layout.addWidget(self.start_x2_input, 1)
 
-        add_parameter_row(params_layout, row=0, label="Стартовая точка", control=start_row)
-        add_parameter_row(params_layout, row=1, label="Точность ε", control=self.epsilon_input)
-        add_parameter_row(params_layout, row=2, label="Лимит итераций", control=self.max_iterations_input)
-        add_parameter_row(params_layout, row=3, label="Начальный шаг", control=self.initial_step_input)
-        add_parameter_row(params_layout, row=4, label="Таймаут (сек)", control=self.timeout_input)
-        add_parameter_row(params_layout, row=5, label="Мин. шаг", control=self.min_step_input)
-        add_parameter_row(params_layout, row=6, label="Шаг градиента", control=self.gradient_step_input)
+        basic_layout.addWidget(start_row)
+
+        advanced_group = QGroupBox("Дополнительные")
+        advanced_layout = create_parameter_grid(advanced_group)
+
+        add_parameter_row(advanced_layout, row=0, label="Точность ε", control=self.epsilon_input)
+        add_parameter_row(advanced_layout, row=1, label="Лимит итераций", control=self.max_iterations_input)
+        add_parameter_row(advanced_layout, row=2, label="Начальный шаг", control=self.initial_step_input)
+        add_parameter_row(advanced_layout, row=3, label="Таймаут (сек)", control=self.timeout_input)
+        add_parameter_row(advanced_layout, row=4, label="Мин. шаг", control=self.min_step_input)
+        add_parameter_row(advanced_layout, row=5, label="Шаг градиента", control=self.gradient_step_input)
         add_parameter_row(
-            params_layout,
-            row=7,
+            advanced_layout,
+            row=6,
             label="Лимит расширений шага",
             control=self.max_step_expansions_input,
         )
 
         self.run_button = create_primary_action_button(text="Рассчитать", on_click=self._run_clicked)
 
-        layout.addWidget(objective_group)
-        layout.addWidget(method_group)
-        layout.addWidget(params_group)
+        layout.addWidget(basic_group)
+        layout.addWidget(advanced_group)
         layout.addWidget(self.run_button)
         layout.addStretch(1)
         return panel
@@ -327,25 +253,25 @@ class GradientMethodsWindow(QMainWindow):
             with_tables_empty_state=True,
             tables_empty_title="Пока нет результатов",
             tables_empty_description=(
-                "Слева выбери метод, формулу и параметры запуска.\n"
-                "После расчёта здесь появятся итог и таблица итераций."
+                "Слева выбери метод, формулу и параметры расчёта.\n"
+                "После запуска здесь появятся результаты и таблица итераций."
             ),
-            tables_empty_hint="Нажми «Рассчитать», чтобы получить результат.",
+            tables_empty_hint="Нажми «Рассчитать», чтобы получить результаты и графики.",
         )
 
         self.results_empty_stack = workspace.tables_empty_stack
         if self.results_empty_stack is None:
             raise RuntimeError("Ожидался EmptyStateStack для вкладки таблиц")
 
-        summary_group = QGroupBox("Итог запуска")
+        summary_group = QGroupBox("Результаты расчёта")
         summary_layout = QVBoxLayout(summary_group)
-        self.summary_table = QTableWidget(0, 8)
+        self.summary_table = QTableWidget(0, 7)
         self.summary_table.setHorizontalHeaderLabels(
-            ["Метод", "Trace ID", "Старт", "x*", "f(x*)", "N", "Успех", "Причина"]
+            ["Метод", "Старт", "x*", "f(x*)", "Итераций", "Результат", "Причина завершения"]
         )
         summary_header = MathHeaderView(Qt.Horizontal, self.summary_table)
         self.summary_table.setHorizontalHeader(summary_header)
-        summary_header.set_math_labels(["Метод", "Trace ID", "Старт", "x*", "f(x*)", "N", "Успех", "Причина"])
+        summary_header.set_math_labels(["Метод", "Старт", "x*", "f(x*)", "Итераций", "Результат", "Причина"])
         self.summary_table.verticalHeader().setVisible(False)
         self.summary_table.horizontalHeader().setDefaultAlignment(Qt.AlignCenter)
         self.summary_table.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
@@ -364,10 +290,10 @@ class GradientMethodsWindow(QMainWindow):
         steps_group = QGroupBox("Итерации")
         steps_layout = QVBoxLayout(steps_group)
         self.steps_table = QTableWidget(0, 6)
-        self.steps_table.setHorizontalHeaderLabels(["k", "x1", "x2", "F(x)", "||grad||", "step"])
+        self.steps_table.setHorizontalHeaderLabels(["k", "x1", "x2", "F(x)", "||grad||", "Шаг"])
         steps_header = MathHeaderView(Qt.Horizontal, self.steps_table)
         self.steps_table.setHorizontalHeader(steps_header)
-        steps_header.set_math_labels(["k", "x<sub>1</sub>", "x<sub>2</sub>", "F(x)", "||grad||", "step"])
+        steps_header.set_math_labels(["k", "x<sub>1</sub>", "x<sub>2</sub>", "F(x)", "||grad||", "Шаг"])
         self.steps_table.verticalHeader().setVisible(False)
         self.steps_table.horizontalHeader().setDefaultAlignment(Qt.AlignCenter)
         self.steps_table.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
@@ -522,7 +448,7 @@ class GradientMethodsWindow(QMainWindow):
     def _on_run_succeeded(self, payload: object) -> None:
         self._set_busy(False)
         if not isinstance(payload, RunPayload):
-            QMessageBox.critical(self, "Ошибка расчета", "Некорректный формат ответа вычислений.")
+            QMessageBox.critical(self, "Ошибка расчёта", "Некорректный формат ответа вычислений.")
             return
 
         self._last_payload = payload
@@ -533,19 +459,18 @@ class GradientMethodsWindow(QMainWindow):
 
     def _on_run_failed(self, message: str, _stack: str) -> None:
         self._set_busy(False)
-        QMessageBox.critical(self, "Ошибка расчета", message)
+        QMessageBox.critical(self, "Ошибка расчёта", message)
 
     def _render_summary(self, payload: RunPayload) -> None:
         result = payload.result
         rows = [
             result.method_name,
-            payload.metrics.trace_id,
             f"({result.start_point[0]:.6f}; {result.start_point[1]:.6f})",
             f"({result.optimum_point[0]:.8f}; {result.optimum_point[1]:.8f})",
             f"{result.optimum_value:.8f}",
             str(result.iterations_count),
-            "да" if result.success else "нет",
-            result.stop_reason,
+            self._format_result_status(result.success),
+            self._format_stop_reason(result.stop_reason),
         ]
 
         self.summary_table.setRowCount(1)
@@ -582,8 +507,8 @@ class GradientMethodsWindow(QMainWindow):
 
         self.plot_state_label.hide()
         self.plot_context_label.setText(
-            f"Метод: {result.method_name} | Trace ID: {payload.metrics.trace_id} | "
-            f"Итераций: {result.iterations_count} | Причина остановки: {result.stop_reason}"
+            f"Метод: {result.method_name} | Итераций: {result.iterations_count} | "
+            f"Причина завершения: {self._format_stop_reason(result.stop_reason)}"
         )
         self.plot_context_label.show()
 
@@ -642,10 +567,7 @@ class GradientMethodsWindow(QMainWindow):
         self.plot_context_label.hide()
         self.plot_state_label.setText("График появится после расчёта.")
         self.plot_state_label.show()
-        clear_plot_canvas(
-            self.canvas,
-            message="График появится после запуска расчета",
-        )
+        clear_plot_canvas(self.canvas, message="График появится после запуска расчёта")
 
     def _selected_method(self) -> str | None:
         for method, button in self.method_buttons.items():
@@ -657,7 +579,7 @@ class GradientMethodsWindow(QMainWindow):
         set_table_empty_layout(self.summary_table)
 
     def _set_summary_table_data_layout(self) -> None:
-        set_table_data_layout(self.summary_table, [150, 110, 170, 170, 120, 58, 84, 180])
+        set_table_data_layout(self.summary_table, [150, 170, 170, 120, 58, 100, 220])
 
     def _set_steps_table_empty_layout(self) -> None:
         set_table_empty_layout(self.steps_table)
@@ -675,6 +597,20 @@ class GradientMethodsWindow(QMainWindow):
         self._controls_panel.setEnabled(not busy)
         self.run_button.setDisabled(busy)
         self.run_button.setText("Считаю..." if busy else "Рассчитать")
+
+    @staticmethod
+    def _format_result_status(success: bool) -> str:
+        return "успешно" if success else "не удалось"
+
+    @staticmethod
+    def _format_stop_reason(stop_reason: str) -> str:
+        labels = {
+            "timeout": "таймаут",
+            "gradient_norm_reached": "достигнут критерий по норме градиента",
+            "no_improving_step": "улучшающий шаг не найден",
+            "max_iterations_reached": "достигнут лимит итераций",
+        }
+        return labels.get(stop_reason, "неизвестная причина")
 
     def _update_formula_preview(self, raw_expression: str) -> None:
         expression = raw_expression.strip() or "—"

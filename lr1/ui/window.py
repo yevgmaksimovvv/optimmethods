@@ -155,7 +155,7 @@ class ExtremumWindow(QMainWindow):
                 min-height: 22px;
                 font-size: 15px;
             }
-            QLineEdit, QListWidget {
+            QListWidget {
                 background: #131824;
                 border: 1px solid #3f4a62;
                 border-radius: 8px;
@@ -163,13 +163,12 @@ class ExtremumWindow(QMainWindow):
                 color: #f5f7fb;
                 selection-background-color: #2379ff;
             }
-            QLineEdit:focus { border: 1px solid #2f8fff; }
             QListWidget#GridRunList {
                 background: transparent;
                 border: 0;
                 padding: 0;
             }
-            QTreeWidget, QTableWidget {
+            QTreeWidget {
                 background: #14161b;
                 border: 1px solid #464b59;
                 border-radius: 8px;
@@ -189,12 +188,15 @@ class ExtremumWindow(QMainWindow):
                 border: 0;
                 background: transparent;
             }
+            QListWidget#GridRunList::item:selected {
+                background: transparent;
+            }
             QWidget#GridRunCard {
                 background: #171b24;
                 border: 1px solid #31384a;
                 border-radius: 12px;
             }
-            QWidget#GridRunCard[selected="true"] {
+            QListWidget#GridRunList::item:selected QWidget#GridRunCard {
                 background: #1b3c73;
                 border: 1px solid #2f81f7;
             }
@@ -214,21 +216,16 @@ class ExtremumWindow(QMainWindow):
                 font-weight: 700;
                 padding-top: 1px;
             }
-            QWidget#GridRunCard[selected="true"] QLabel[role="grid-run-metric-caption"] {
+            QListWidget#GridRunList::item:selected QWidget#GridRunCard QLabel[role="grid-run-metric-caption"] {
                 color: #cddcff;
             }
-            QWidget#GridRunCard[selected="true"] QLabel[role="grid-run-metric-value"] {
+            QListWidget#GridRunList::item:selected QWidget#GridRunCard QLabel[role="grid-run-metric-value"] {
                 color: #ffffff;
             }
             QTreeWidget#IterationsTree {
                 background: #12161d;
                 alternate-background-color: #151b25;
                 font-family: "SF Mono", "Menlo", "Consolas", monospace;
-                font-size: 14px;
-            }
-            QTableWidget[variant="report"] {
-                background: #12161d;
-                alternate-background-color: #151b25;
                 font-size: 14px;
             }
             QTreeWidget#IterationsTree::item {
@@ -243,42 +240,9 @@ class ExtremumWindow(QMainWindow):
                 background: #22314f;
                 color: #ffffff;
             }
-            QTreeWidget#IterationsTree QHeaderView::section {
-                background: #222938;
-                color: #dbe2ee;
-                border-right: 1px solid #33415b;
-                border-bottom: 1px solid #33415b;
-                padding: 6px 8px;
-                font-size: 12px;
-                font-weight: 700;
-            }
-            QTableWidget[variant="report"] QHeaderView::section {
-                background: #222938;
-                color: #dbe2ee;
-                border-right: 1px solid #33415b;
-                border-bottom: 1px solid #33415b;
-                padding: 6px 8px;
-                font-size: 12px;
-                font-weight: 700;
-            }
-            QHeaderView::section {
-                background: #252933;
-                color: #d8dbe2;
-                border: 0;
-                border-right: 1px solid #3c4358;
-                border-bottom: 1px solid #3c4358;
-                padding: 8px 10px;
-                font-weight: 600;
-            }
             QLabel#SectionHint {
-                color: #c8cfdb;
                 font-size: 14px;
                 padding: 4px 2px;
-            }
-            QLabel[role="parameter-label"] {
-                color: #dce6f5;
-                font-size: 15px;
-                font-weight: 600;
             }
             QWidget#FinalResultCard {
                 background: #181b24;
@@ -302,27 +266,6 @@ class ExtremumWindow(QMainWindow):
                 color: #eef2f8;
                 font-size: 16px;
                 font-weight: 700;
-            }
-            QLabel#SectionCaption {
-                color: #9aa5bb;
-                font-size: 12px;
-                font-weight: 700;
-                letter-spacing: 0.04em;
-                text-transform: uppercase;
-            }
-            QLabel#SummaryEmptyTitle {
-                color: #eef2f8;
-                font-size: 22px;
-                font-weight: 700;
-            }
-            QLabel#SummaryEmptyText {
-                color: #b8c1d1;
-                font-size: 15px;
-            }
-            QWidget#SummaryEmptyCard {
-                background: #181b24;
-                border: 1px solid #31384a;
-                border-radius: 14px;
             }
             QWidget#FunctionFormulaCard, QWidget#CoefficientCard {
                 background: #181b24;
@@ -380,7 +323,7 @@ class ExtremumWindow(QMainWindow):
                 "Слева выбери функцию, диапазон и метод.\n"
                 "После запуска здесь появятся результаты и сравнение методов."
             ),
-            tables_empty_hint="Нажми «Рассчитать», чтобы получить таблицы и графики.",
+            tables_empty_hint="Нажми «Рассчитать», чтобы получить результаты и графики.",
         )
         self.tabs = workspace.tabs
         self.results_tab_stack = workspace.tables_empty_stack
@@ -463,13 +406,13 @@ class ExtremumWindow(QMainWindow):
 
     def _build_parameters_box(self, layout: QVBoxLayout) -> None:
         """Строит блок ручного ввода интервала, `ε` и `l`."""
-        box = QGroupBox("Параметры расчетов")
+        box = QGroupBox("Параметры расчёта")
         box.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
         grid = create_parameter_grid(box, vertical_spacing=6)
 
         self.a_input, self.b_input = self._add_interval_inputs(grid, row=0)
         self._add_series_inputs(grid, row=1, label="Точности ε", target="eps")
-        self._add_series_inputs(grid, row=2, label="Длины интервала L", target="l")
+        self._add_series_inputs(grid, row=2, label="Длины интервала l", target="l")
 
         layout.addWidget(box)
 
@@ -738,9 +681,6 @@ class ExtremumWindow(QMainWindow):
         index = self.function_stack_indexes.get(function_key)
         if index is not None:
             self.function_editor_stack.setCurrentIndex(index)
-            current_page = self.function_editor_stack.currentWidget()
-            if current_page is not None:
-                self.function_editor_stack.setFixedHeight(current_page.sizeHint().height())
 
     def handle_run(self) -> None:
         """Запускает расчёт по всем комбинациям введённых `ε × l`."""

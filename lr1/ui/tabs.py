@@ -410,7 +410,6 @@ class IterationsTab(QWidget):
         """Собирает визуальную карточку одного запуска в режиме серии."""
         card = QWidget()
         card.setObjectName("GridRunCard")
-        card.setProperty("selected", False)
 
         layout = QHBoxLayout(card)
         layout.setContentsMargins(22, 16, 22, 16)
@@ -429,27 +428,8 @@ class IterationsTab(QWidget):
 
         return card
 
-    def _refresh_widget_style(self, widget: QWidget) -> None:
-        """Принудительно обновляет стиль после смены динамических свойств Qt."""
-        style = widget.style()
-        style.unpolish(widget)
-        style.polish(widget)
-        widget.update()
-
-    def _sync_grid_run_card_selection(self) -> None:
-        """Синхронизирует подсветку карточек с текущим выбранным элементом списка."""
-        current_row = self.grid_run_list.currentRow()
-        for row_index in range(self.grid_run_list.count()):
-            item = self.grid_run_list.item(row_index)
-            widget = self.grid_run_list.itemWidget(item)
-            if widget is None:
-                continue
-            widget.setProperty("selected", row_index == current_row)
-            self._refresh_widget_style(widget)
-
     def _handle_grid_run_change(self, row: int) -> None:
         """Реагирует на смену выбранного прогона серии."""
-        self._sync_grid_run_card_selection()
         self.on_grid_run_change(row)
 
     def rebuild_method_buttons(self, report: Optional[RunReport], selected_method_key: str) -> None:
@@ -512,11 +492,10 @@ class IterationsTab(QWidget):
 
         self.grid_runs_caption.setVisible(bool(runs))
         self.grid_run_list.setVisible(bool(runs))
-        if runs:
-            self.grid_run_list.setCurrentRow(min(selected_index, len(runs) - 1))
-        self._sync_grid_run_card_selection()
         _fit_list_height(self.grid_run_list)
         self.grid_run_list.blockSignals(False)
+        if runs:
+            self.grid_run_list.setCurrentRow(min(selected_index, len(runs) - 1))
 
     def populate_iterations(self, result: Optional[SearchResult]) -> None:
         """Показывает итерации выбранного результата в дереве.

@@ -40,6 +40,18 @@ class SolverConfig:
 
 
 @dataclass(frozen=True)
+class DiscreteSolverConfig:
+    """Входные параметры дискретного варианта метода Розенброка."""
+
+    epsilon: float
+    max_iterations: int
+    delta_step: float
+    alpha: float
+    beta: float
+    direction_zero_tolerance: float
+
+
+@dataclass(frozen=True)
 class IterationStep:
     """Одна строка таблицы итераций по заданию."""
 

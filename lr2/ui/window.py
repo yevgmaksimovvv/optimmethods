@@ -46,6 +46,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QLabel,
+    QLineEdit,
     QMainWindow,
     QMessageBox,
     QSizePolicy,
@@ -62,11 +63,12 @@ from lr2.application.services import (
     parse_epsilons,
     parse_points,
     run_batch,
+    run_discrete_batch,
 )
 from lr2.domain.models import BatchResult, SolverResult
 from lr2.domain.polynomial import evaluate_polynomial, format_polynomial
 
-APP_TITLE = "ЛР2 — Метод Розенброка (непрерывный шаг)"
+APP_TITLE = "ЛР2 — Метод Розенброка"
 COEFFICIENT_MAX_DEGREE = 4
 COEFFICIENT_MATRIX_SIZE = COEFFICIENT_MAX_DEGREE + 1
 EPSILON_INPUT_WIDTH = 96
@@ -114,9 +116,13 @@ class RosenbrockWindow(QMainWindow):
         self._batch_result: BatchResult | None = None
         self._selected_run_index: int | None = None
         self._active_preset_key = "variant_f1"
+        self._solver_mode = "continuous"
         self._plot_mode: str = "contour"
         self._epsilon_row: DynamicSeriesInputRow | None = None
         self._start_row: DynamicSeriesInputRow | None = None
+        self._delta_step_input: QLineEdit | None = None
+        self._alpha_input: QLineEdit | None = None
+        self._beta_input: QLineEdit | None = None
         self._run_task = TaskController(self)
         self._run_task.succeeded.connect(self._on_run_succeeded)
         self._run_task.failed.connect(self._on_run_failed)
@@ -159,6 +165,8 @@ class RosenbrockWindow(QMainWindow):
 
         self.preset_buttons["variant_f1"].setChecked(True)
         self._on_preset_selected("variant_f1", True)
+        self.mode_buttons["continuous"].setChecked(True)
+        self._on_solver_mode_selected("continuous", True)
         self._clear_plot()
 
     def _apply_styles(self) -> None:
@@ -191,85 +199,15 @@ class RosenbrockWindow(QMainWindow):
             )
             + """
             QLineEdit {
-                background: #131824;
-                border: 1px solid #3f4a62;
-                border-radius: 8px;
-                padding: 7px 10px;
-                color: #f5f7fb;
-                selection-background-color: #2379ff;
                 min-height: 24px;
             }
-            QLineEdit:focus { border: 1px solid #2f8fff; }
             QLabel[role="hint"] {
                 color: #a8b1c3;
                 font-size: 12px;
             }
-            QLabel[role="parameter-label"] {
-                color: #dce6f5;
-                font-size: 15px;
-                font-weight: 600;
-            }
-            QLabel[role="formula-preview"] {
-                background: #101827;
-                border: 1px solid #304665;
-                border-radius: 12px;
-                padding: 10px 14px;
-                color: #ecf3ff;
-                font-size: 18px;
-                font-weight: 700;
-            }
-            QTableWidget {
-                background: #12161d;
-                border: 1px solid #464b59;
-                border-radius: 8px;
-                color: #f5f7fb;
-                gridline-color: #2d3241;
-                selection-background-color: #2a6df4;
-                alternate-background-color: #151b25;
-                font-family: "SF Mono", "Menlo", "Consolas", monospace;
-                font-size: 14px;
-            }
-            QHeaderView::section {
-                background: #222938;
-                color: #dbe2ee;
-                border: 0;
-                border-right: 1px solid #33415b;
-                border-bottom: 1px solid #33415b;
-                padding: 6px 8px;
-                font-weight: 700;
-                font-size: 12px;
-                font-family: "Segoe UI", "Helvetica Neue", "Arial", sans-serif;
-            }
-            QTableCornerButton::section {
-                background: #222938;
-                border: 0;
-                border-right: 1px solid #33415b;
-                border-bottom: 1px solid #33415b;
-            }
-            QLabel#SectionCaption {
-                color: #9aa5bb;
-                font-size: 12px;
-                font-weight: 700;
-                letter-spacing: 0.04em;
-                text-transform: uppercase;
-            }
             QSplitter::handle {
                 background: #2a3549;
                 border-radius: 3px;
-            }
-            QLabel#SummaryEmptyTitle {
-                color: #eef2f8;
-                font-size: 22px;
-                font-weight: 700;
-            }
-            QLabel#SummaryEmptyText {
-                color: #b8c1d1;
-                font-size: 15px;
-            }
-            QWidget#SummaryEmptyCard {
-                background: #181b24;
-                border: 1px solid #31384a;
-                border-radius: 14px;
             }
             """
             + build_choice_chip_styles()
@@ -303,7 +241,7 @@ class RosenbrockWindow(QMainWindow):
 
         self.formula_preview = QLabel()
         self.formula_preview.setProperty("role", "formula-preview")
-        self.formula_preview.setMinimumHeight(100)
+        self.formula_preview.setMinimumHeight(88)
         self.formula_preview.setWordWrap(True)
         self.formula_preview.setAlignment(Qt.AlignCenter)
         self.formula_preview.setTextFormat(Qt.RichText)
@@ -338,7 +276,7 @@ class RosenbrockWindow(QMainWindow):
         source_layout.addWidget(coeff_label)
         source_layout.addWidget(self.coefficients_table)
 
-        info_group = QGroupBox("Параметры расчетов")
+        info_group = QGroupBox("Параметры расчёта")
         info_group.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
         info_grid = create_parameter_grid(info_group)
 
@@ -369,12 +307,41 @@ class RosenbrockWindow(QMainWindow):
         add_parameter_row(info_grid, row=0, label="Точности ε", control=self._epsilon_row.row_widget)
         add_parameter_row(info_grid, row=1, label="Стартовые точки", control=self._start_row.row_widget)
 
+        mode_group, _mode_layout = create_standard_group("Режим")
+        self.mode_group = QButtonGroup(self)
+        self.mode_group.setExclusive(True)
+        mode_row, mode_buttons = create_choice_chip_grid(
+            group=self.mode_group,
+            options=(("Непрерывный", "continuous"), ("Дискретный", "discrete")),
+            columns=2,
+            horizontal_spacing=6,
+            vertical_spacing=6,
+            on_clicked=self._on_solver_mode_selected,
+        )
+        self.mode_buttons = {key: button for key, button in zip(("continuous", "discrete"), mode_buttons, strict=True)}
+        _mode_layout.addWidget(mode_row)
+
+        discrete_group = QGroupBox("Параметры дискретного шага")
+        self._delta_step_input = QLineEdit("0.2")
+        self._alpha_input = QLineEdit("1.4")
+        self._beta_input = QLineEdit("-0.2")
+        for widget in (self._delta_step_input, self._alpha_input, self._beta_input):
+            widget.setMinimumWidth(96)
+        discrete_grid = create_parameter_grid(discrete_group, label_min_width=124)
+        add_parameter_row(discrete_grid, row=0, label="Δ0", control=self._delta_step_input)
+        add_parameter_row(discrete_grid, row=1, label="α", control=self._alpha_input)
+        add_parameter_row(discrete_grid, row=2, label="β", control=self._beta_input)
+        self._discrete_group = discrete_group
+
         run_button = create_primary_action_button(text="Рассчитать", on_click=self._run_clicked)
 
         layout.addWidget(source_group)
         layout.addWidget(info_group)
+        layout.addWidget(mode_group)
+        layout.addWidget(discrete_group)
         layout.addWidget(run_button)
         layout.addStretch(1)
+        discrete_group.setVisible(False)
         return panel
 
     def _build_results_panel(self) -> QWidget:
@@ -385,9 +352,9 @@ class RosenbrockWindow(QMainWindow):
             tables_empty_title="Пока нет результатов",
             tables_empty_description=(
                 "Слева выбери функцию, матрицу коэффициентов и параметры расчёта.\n"
-                "После запуска здесь появятся итоги и таблица итераций."
+                "После запуска здесь появятся результаты и таблица итераций."
             ),
-            tables_empty_hint="Нажми «Рассчитать», чтобы получить таблицы и графики.",
+            tables_empty_hint="Нажми «Рассчитать», чтобы получить результаты и графики.",
         )
         panel = workspace.panel
         table_content_layout = workspace.tables_layout
@@ -395,13 +362,15 @@ class RosenbrockWindow(QMainWindow):
         if self.results_tab_stack is None:
             raise RuntimeError("Ожидался EmptyStateStack для вкладки таблиц")
 
-        summary_group = QGroupBox("Итоги запусков")
+        summary_group = QGroupBox("Результаты расчёта")
         summary_layout = QVBoxLayout(summary_group)
         self.summary_table = QTableWidget(0, 7)
-        self.summary_table.setHorizontalHeaderLabels(["#", "ε", "Старт", "x*", "f(x*)", "N", "Статус"])
+        self.summary_table.setHorizontalHeaderLabels(
+            ["№", "ε", "Старт", "x*", "f(x*)", "Итераций", "Причина завершения"]
+        )
         summary_header = MathHeaderView(Qt.Horizontal, self.summary_table)
         self.summary_table.setHorizontalHeader(summary_header)
-        summary_header.set_math_labels(["#", "&epsilon;", "Старт", "x*", "f(x*)", "N", "Статус"])
+        summary_header.set_math_labels(["№", "&epsilon;", "Старт", "x*", "f(x*)", "Итераций", "Причина"])
         self.summary_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.summary_table.horizontalHeader().setDefaultAlignment(Qt.AlignCenter)
         self.summary_table.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
@@ -423,25 +392,8 @@ class RosenbrockWindow(QMainWindow):
         steps_group = QGroupBox("Итерации")
         steps_layout = QVBoxLayout(steps_group)
         self.steps_table = QTableWidget(0, 10)
-        self.steps_table.setHorizontalHeaderLabels(
-            ["K", "x_k", "F(x_k)", "j", "d_j", "y_j", "f(y_j)", "λ_j", "y_j+1", "f(y_j+1)"]
-        )
-        steps_header = MathHeaderView(Qt.Horizontal, self.steps_table)
-        self.steps_table.setHorizontalHeader(steps_header)
-        steps_header.set_math_labels(
-            [
-                "K",
-                "x<sub>k</sub>",
-                "F(x<sub>k</sub>)",
-                "j",
-                "d<sub>j</sub>",
-                "y<sub>j</sub>",
-                "f(y<sub>j</sub>)",
-                "&lambda;<sub>j</sub>",
-                "y<sub>j+1</sub>",
-                "f(y<sub>j+1</sub>)",
-            ]
-        )
+        self.steps_header = MathHeaderView(Qt.Horizontal, self.steps_table)
+        self.steps_table.setHorizontalHeader(self.steps_header)
         self.steps_table.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.steps_table.horizontalHeader().setDefaultAlignment(Qt.AlignCenter)
         self.steps_table.setTextElideMode(Qt.ElideNone)
@@ -457,6 +409,7 @@ class RosenbrockWindow(QMainWindow):
         )
         steps_layout.addWidget(self.steps_table)
         table_content_layout.addWidget(steps_group)
+        self._set_steps_table_headers()
         self._set_results_tab_empty_state(True)
 
         plot_group = QGroupBox("Графики")
@@ -499,6 +452,18 @@ class RosenbrockWindow(QMainWindow):
         self._apply_preset(preset_key)
         for key, button in self.preset_buttons.items():
             button.setChecked(key == preset_key)
+
+    def _on_solver_mode_selected(self, mode_key: str, checked: bool = True) -> None:
+        if not checked:
+            return
+        self._solver_mode = mode_key
+        for key, button in self.mode_buttons.items():
+            button.setChecked(key == mode_key)
+        self._sync_solver_mode_ui()
+
+    def _sync_solver_mode_ui(self) -> None:
+        self._discrete_group.setVisible(self._solver_mode == "discrete")
+        self._set_steps_table_headers()
 
     def _set_formula_preview(self, formula_text: str) -> None:
         self.formula_preview.setText(formula_text)
@@ -567,15 +532,22 @@ class RosenbrockWindow(QMainWindow):
             polynomial = build_polynomial(PRESET_CONFIGS[self._active_preset_key]["formula_text"], matrix)
             epsilons = parse_epsilons(self._collect_epsilons_raw())
             starts = parse_points(self._collect_start_points_raw())
+            discrete_params = self._collect_discrete_parameters() if self._solver_mode == "discrete" else None
         except Exception as exc:
             QMessageBox.critical(self, "Ошибка ввода", str(exc))
             return
 
         self._set_busy(True)
-        self._run_task.start(
-            "Выполняется расчёт...",
-            lambda: run_batch(polynomial, epsilons, starts),
-        )
+        if discrete_params is None:
+            self._run_task.start(
+                "Выполняется расчёт...",
+                lambda: run_batch(polynomial, epsilons, starts),
+            )
+        else:
+            self._run_task.start(
+                "Выполняется расчёт...",
+                lambda: run_discrete_batch(polynomial, epsilons, starts, **discrete_params),
+            )
 
     def _on_run_succeeded(self, payload: object) -> None:
         if not isinstance(payload, tuple) or len(payload) != 2:
@@ -595,7 +567,7 @@ class RosenbrockWindow(QMainWindow):
 
     def _on_run_failed(self, message: str, _stack: str) -> None:
         self._set_busy(False)
-        QMessageBox.critical(self, "Ошибка расчета", message)
+        QMessageBox.critical(self, "Ошибка расчёта", message)
 
     def _assign_batch_result(self, batch_result: BatchResult) -> None:
         self._batch_result = batch_result
@@ -642,7 +614,7 @@ class RosenbrockWindow(QMainWindow):
                 self._format_point(run.optimum_point),
                 f"{run.optimum_value:.8g}",
                 str(run.iterations_count),
-                "OK" if run.success else "MAX_ITER",
+                run.stop_reason,
             ]
             for col, value in enumerate(row):
                 item = QTableWidgetItem(value)
@@ -680,6 +652,15 @@ class RosenbrockWindow(QMainWindow):
             raise ValueError("Список стартовых точек пуст.")
         return " | ".join(points)
 
+    def _collect_discrete_parameters(self) -> dict[str, float]:
+        if self._delta_step_input is None or self._alpha_input is None or self._beta_input is None:
+            raise ValueError("Параметры дискретного шага не инициализированы.")
+        return {
+            "delta_step": parse_localized_float(self._delta_step_input.text().strip(), "Δ0"),
+            "alpha": parse_localized_float(self._alpha_input.text().strip(), "α"),
+            "beta": parse_localized_float(self._beta_input.text().strip(), "β"),
+        }
+
     def _set_start_points_raw(self, raw: str) -> None:
         if self._start_row is None:
             return
@@ -694,6 +675,51 @@ class RosenbrockWindow(QMainWindow):
                 continue
             values.append((parts[0], parts[1]))
         self._start_row.reset(tuple(values) if values else (("", ""),))
+
+    def _set_steps_table_headers(self) -> None:
+        if not hasattr(self, "steps_table") or not hasattr(self, "steps_header"):
+            return
+        if self._solver_mode == "discrete":
+            labels = [
+                "K",
+                "x_k",
+                "F(x_k)",
+                "j",
+                "d_j",
+                "y_j",
+                "f(y_j)",
+                "Δ_j",
+                "y_j+Δ_j d_j",
+                "f(y_j+Δ_j d_j)",
+            ]
+            math_labels = [
+                "K",
+                "x<sub>k</sub>",
+                "F(x<sub>k</sub>)",
+                "j",
+                "d<sub>j</sub>",
+                "y<sub>j</sub>",
+                "f(y<sub>j</sub>)",
+                "&Delta;<sub>j</sub>",
+                "y<sub>j</sub>+&Delta;<sub>j</sub>d<sub>j</sub>",
+                "f(y<sub>j</sub>+&Delta;<sub>j</sub>d<sub>j</sub>)",
+            ]
+        else:
+            labels = ["K", "x_k", "F(x_k)", "j", "d_j", "y_j", "f(y_j)", "λ_j", "y_j+1", "f(y_j+1)"]
+            math_labels = [
+                "K",
+                "x<sub>k</sub>",
+                "F(x<sub>k</sub>)",
+                "j",
+                "d<sub>j</sub>",
+                "y<sub>j</sub>",
+                "f(y<sub>j</sub>)",
+                "&lambda;<sub>j</sub>",
+                "y<sub>j+1</sub>",
+                "f(y<sub>j+1</sub>)",
+            ]
+        self.steps_table.setHorizontalHeaderLabels(labels)
+        self.steps_header.set_math_labels(math_labels)
 
     def _on_summary_selection_changed(self) -> None:
         if not self._batch_result:
@@ -735,7 +761,7 @@ class RosenbrockWindow(QMainWindow):
 
     def _set_summary_table_data_layout(self) -> None:
         """Для данных: ширина по содержимому + горизонтальный скролл."""
-        set_table_data_layout(self.summary_table, [48, 76, 140, 140, 110, 58, 120])
+        set_table_data_layout(self.summary_table, [48, 76, 140, 140, 110, 58, 220])
 
     def _set_steps_table_empty_layout(self) -> None:
         """Для пустого состояния убираем визуальный «обрубок» справа."""

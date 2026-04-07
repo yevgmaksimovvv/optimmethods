@@ -97,7 +97,7 @@ def build_default_registry() -> LabRegistry:
         DefaultLabPlugin(
             lab_id="lr2",
             title="ЛР2",
-            description="Метод Розенброка (непрерывный шаг)",
+            description="Метод Розенброка (непрерывный и дискретный шаг)",
             build_page_fn=_build_lr2_page,
             standalone_launcher=lambda: _launch_module("lr2"),
         )

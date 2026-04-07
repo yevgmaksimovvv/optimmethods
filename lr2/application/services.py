@@ -10,9 +10,16 @@ from typing import Final
 
 from optim_core.parsing import parse_localized_float
 
-from lr2.domain.models import BatchResult, Polynomial2D, SolverConfig, SolverResult, normalize_coefficients
+from lr2.domain.models import (
+    BatchResult,
+    DiscreteSolverConfig,
+    Polynomial2D,
+    SolverConfig,
+    SolverResult,
+    normalize_coefficients,
+)
 from lr2.domain.polynomial import evaluate_polynomial, format_polynomial
-from lr2.domain.rosenbrock import rosenbrock_minimize
+from lr2.domain.rosenbrock import discrete_rosenbrock_minimize, rosenbrock_minimize
 
 logger = logging.getLogger("lr2.service")
 
@@ -39,6 +46,14 @@ DEFAULT_SOLVER_CONFIG: dict[str, int | float] = {
     "stagnation_rel_tolerance": 1e-10,
 }
 
+DEFAULT_DISCRETE_SOLVER_CONFIG: dict[str, int | float] = {
+    "max_iterations": 200,
+    "delta_step": 0.2,
+    "alpha": 1.4,
+    "beta": -0.2,
+    "direction_zero_tolerance": 1e-12,
+}
+
 POLYNOMIAL_DIMENSION: Final[int] = 2
 
 
@@ -56,6 +71,7 @@ VARIANT_PRESETS: dict[str, tuple[tuple[float, ...], ...]] = {
         (9.0, 0.0, 0.0),
     ),
 }
+
 
 def parse_epsilons(raw: str) -> tuple[float, ...]:
     """Парсит список epsilon через запятую."""
@@ -175,6 +191,110 @@ def run_batch(
     )
     logger.info(
         "run_batch done trace_id=%s run_count=%d success_count=%d error_count=%d latency_ms=%.2f",
+        metrics.trace_id,
+        metrics.run_count,
+        metrics.success_count,
+        metrics.error_count,
+        metrics.latency_ms,
+    )
+    return BatchResult(polynomial=polynomial, runs=tuple(runs)), metrics
+
+
+def run_discrete_batch(
+    polynomial: Polynomial2D,
+    epsilons: tuple[float, ...],
+    start_points: tuple[tuple[float, float], ...],
+    max_iterations: int | None = None,
+    delta_step: float | None = None,
+    alpha: float | None = None,
+    beta: float | None = None,
+) -> tuple[BatchResult, ServiceMetrics]:
+    """Запускает дискретный вариант метода для всех комбинаций параметров."""
+    trace_id = uuid.uuid4().hex[:12]
+    started = time.perf_counter()
+    logger.info(
+        "run_discrete_batch start trace_id=%s title=%s formula=%s epsilons=%s start_points=%s",
+        trace_id,
+        polynomial.title,
+        format_polynomial(polynomial),
+        epsilons,
+        start_points,
+    )
+
+    runs: list[SolverResult] = []
+    errors = 0
+    for epsilon in epsilons:
+        config_payload = dict(DEFAULT_DISCRETE_SOLVER_CONFIG)
+        if max_iterations is not None:
+            config_payload["max_iterations"] = max_iterations
+        if delta_step is not None:
+            config_payload["delta_step"] = delta_step
+        if alpha is not None:
+            config_payload["alpha"] = alpha
+        if beta is not None:
+            config_payload["beta"] = beta
+        config = DiscreteSolverConfig(
+            epsilon=epsilon,
+            max_iterations=int(config_payload["max_iterations"]),
+            delta_step=float(config_payload["delta_step"]),
+            alpha=float(config_payload["alpha"]),
+            beta=float(config_payload["beta"]),
+            direction_zero_tolerance=float(config_payload["direction_zero_tolerance"]),
+        )
+        for start_point in start_points:
+            if len(start_point) != POLYNOMIAL_DIMENSION:
+                raise ValueError(
+                    f"Ожидалась стартовая точка размерности {POLYNOMIAL_DIMENSION}, "
+                    f"получено {len(start_point)}"
+                )
+
+            def objective(vector: tuple[float, ...]) -> float:
+                if len(vector) != POLYNOMIAL_DIMENSION:
+                    raise ValueError(
+                        f"Ожидался вектор размерности {POLYNOMIAL_DIMENSION}, получено {len(vector)}"
+                    )
+                return polynomial_value(polynomial, vector)
+
+            try:
+                run = discrete_rosenbrock_minimize(
+                    objective=objective,
+                    start_point=start_point,
+                    config=config,
+                )
+            except Exception:
+                errors += 1
+                logger.exception(
+                    "run_discrete_batch failed trace_id=%s epsilon=%s start_point=%s",
+                    trace_id,
+                    epsilon,
+                    start_point,
+                )
+                continue
+            runs.append(run)
+            logger.info(
+                (
+                    "run_discrete_batch item trace_id=%s epsilon=%s start=%s "
+                    "success=%s iterations=%s optimum=%s value=%.8f"
+                ),
+                trace_id,
+                epsilon,
+                start_point,
+                run.success,
+                run.iterations_count,
+                run.optimum_point,
+                run.optimum_value,
+            )
+
+    latency_ms = (time.perf_counter() - started) * 1000.0
+    metrics = ServiceMetrics(
+        trace_id=trace_id,
+        run_count=len(runs),
+        success_count=sum(1 for item in runs if item.success),
+        error_count=errors,
+        latency_ms=latency_ms,
+    )
+    logger.info(
+        "run_discrete_batch done trace_id=%s run_count=%d success_count=%d error_count=%d latency_ms=%.2f",
         metrics.trace_id,
         metrics.run_count,
         metrics.success_count,

@@ -43,6 +43,81 @@ def build_dark_qt_base_styles(tokens: DarkQtThemeTokens) -> str:
             QLabel {{
                 background: transparent;
             }}
+            QLabel#SectionCaption {{
+                color: #9aa5bb;
+                font-size: 12px;
+                font-weight: 700;
+                letter-spacing: 0.04em;
+                text-transform: uppercase;
+            }}
+            QLabel[role="parameter-label"] {{
+                color: #dce6f5;
+                font-size: 15px;
+                font-weight: 600;
+            }}
+            QLabel[role="formula-preview"] {{
+                background: #101827;
+                border: 1px solid #304665;
+                border-radius: 12px;
+                padding: 10px 14px;
+                color: #ecf3ff;
+                font-size: 18px;
+                font-weight: 700;
+            }}
+            QLabel#SectionHint {{
+                color: #a8b1c3;
+                font-size: 12px;
+            }}
+            QLabel#SummaryEmptyTitle {{
+                color: #eef2f8;
+                font-size: 22px;
+                font-weight: 700;
+            }}
+            QLabel#SummaryEmptyText {{
+                color: #b8c1d1;
+                font-size: 15px;
+            }}
+            QWidget#SummaryEmptyCard {{
+                background: #181b24;
+                border: 1px solid #31384a;
+                border-radius: 14px;
+            }}
+            QLineEdit {{
+                background: #131824;
+                border: 1px solid #3f4a62;
+                border-radius: 8px;
+                padding: 7px 10px;
+                color: #f5f7fb;
+                selection-background-color: #2379ff;
+            }}
+            QLineEdit:focus {{
+                border: 1px solid #2f8fff;
+            }}
+            QTableWidget {{
+                background: #12161d;
+                border: 1px solid #464b59;
+                border-radius: 8px;
+                color: #f5f7fb;
+                gridline-color: #2d3241;
+                selection-background-color: #2a6df4;
+                alternate-background-color: #151b25;
+                font-family: "SF Mono", "Menlo", "Consolas", monospace;
+                font-size: 14px;
+            }}
+            QHeaderView::section {{
+                background: #222938;
+                color: #dbe2ee;
+                border-right: 1px solid #33415b;
+                border-bottom: 1px solid #33415b;
+                padding: 6px 8px;
+                font-size: 12px;
+                font-weight: 700;
+            }}
+            QTableCornerButton::section {{
+                background: #222938;
+                border-right: 1px solid #33415b;
+                border-bottom: 1px solid #33415b;
+            }}
             QGroupBox {{
                 border: 1px solid {tokens.group_border};
                 border-radius: {tokens.group_radius_px}px;
