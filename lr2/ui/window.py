@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import math
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -73,8 +74,8 @@ COEFFICIENT_MAX_DEGREE = 4
 COEFFICIENT_MATRIX_SIZE = COEFFICIENT_MAX_DEGREE + 1
 EPSILON_INPUT_WIDTH = 96
 START_INPUT_WIDTH = 64
-CONTROL_BUTTON_SIZE = 44
-ROW_CONTROL_SPACING = 4
+CONTROL_BUTTON_SIZE = 36
+ROW_CONTROL_SPACING = 2
 ARTIFACTS_BASE_DIR = Path("report") / "lr2_runs"
 PRESET_CONFIGS = {
     "variant_f1": {
@@ -102,6 +103,112 @@ PRESET_CONFIGS = {
         "starts": "0;0",
     },
 }
+
+
+def _surface_view_angles(points: np.ndarray) -> tuple[float, float]:
+    """Подбирает ракурс 3D-графика по геометрии траектории."""
+    if points.ndim != 2 or points.shape[0] < 2 or points.shape[1] < 2:
+        return 30.0, -55.0
+
+    xy = np.asarray(points[:, :2], dtype=float)
+    centered = xy - np.mean(xy, axis=0, keepdims=True)
+    if not np.isfinite(centered).all():
+        return 30.0, -55.0
+
+    cov = np.cov(centered, rowvar=False)
+    if cov.shape != (2, 2) or not np.isfinite(cov).all():
+        return 30.0, -55.0
+
+    eigenvalues, eigenvectors = np.linalg.eigh(cov)
+    principal = eigenvectors[:, int(np.argmax(eigenvalues))]
+    azim = float(np.degrees(np.arctan2(principal[1], principal[0]))) + 90.0
+    if azim > 180.0:
+        azim -= 360.0
+    if azim <= -180.0:
+        azim += 360.0
+
+    spans = np.ptp(xy, axis=0)
+    major = float(max(spans.max(), 1.0))
+    minor = float(max(spans.min(), 1e-6))
+    aspect = major / minor
+    elev = 30.0 + min(10.0, max(0.0, math.log1p(max(aspect - 1.0, 0.0)) * 4.0))
+    return elev, azim
+
+
+def _draw_surface_trajectory(
+    ax_surface: _Axes3D,
+    x_vals: np.ndarray,
+    y_vals: np.ndarray,
+    lifted_path_z: list[float],
+) -> None:
+    """Рисует траекторию поверх поверхности с контрастной обводкой."""
+    ax_surface.plot(
+        x_vals,
+        y_vals,
+        lifted_path_z,
+        color="#0f131a",
+        linewidth=12.0,
+        marker="o",
+        markersize=6.6,
+        markerfacecolor="#0f131a",
+        markeredgewidth=0.0,
+        alpha=1.0,
+    )
+    ax_surface.plot(
+        x_vals,
+        y_vals,
+        lifted_path_z,
+        color="#ff2d95",
+        linewidth=6.8,
+        marker="o",
+        markersize=5.4,
+        markerfacecolor="#ff4f87",
+        markeredgecolor="#ffffff",
+        markeredgewidth=1.0,
+        alpha=1.0,
+    )
+    ax_surface.plot(
+        x_vals,
+        y_vals,
+        lifted_path_z,
+        color="#ffffff",
+        linewidth=3.4,
+        marker="o",
+        markersize=4.6,
+        markerfacecolor="#ff4f87",
+        markeredgecolor="#ffffff",
+        markeredgewidth=0.8,
+        alpha=1.0,
+    )
+    ax_surface.scatter(
+        [x_vals[0]],
+        [y_vals[0]],
+        [lifted_path_z[0]],
+        color="#2da3ff",
+        edgecolors="#ffffff",
+        linewidths=1.0,
+        s=160,
+        depthshade=False,
+        alpha=1.0,
+    )
+    ax_surface.scatter(
+        [x_vals[-1]],
+        [y_vals[-1]],
+        [lifted_path_z[-1]],
+        color="#57d773",
+        edgecolors="#ffffff",
+        linewidths=1.0,
+        s=160,
+        depthshade=False,
+        alpha=1.0,
+    )
+
+
+def _report_surface_aspect(x_span: float, y_span: float, z_span: float) -> tuple[float, float, float]:
+    """Подбирает масштаб осей для отчетного 3D-графика."""
+    xy_span = max(x_span, y_span, 1.0)
+    z_display_span = min(max(z_span * 0.35, xy_span * 0.35), xy_span * 1.25)
+    return xy_span, xy_span, z_display_span
 
 
 class RosenbrockWindow(QMainWindow):
@@ -199,11 +306,42 @@ class RosenbrockWindow(QMainWindow):
             )
             + """
             QLineEdit {
-                min-height: 24px;
+                min-height: 22px;
+                padding: 6px 10px;
+                font-size: 14px;
             }
-            QLabel[role="hint"] {
-                color: #a8b1c3;
-                font-size: 12px;
+            QGroupBox {
+                font-size: 14px;
+                font-weight: 700;
+            }
+            QLabel#SectionCaption {
+                font-size: 11px;
+            }
+            QLabel[role="parameter-label"] {
+                font-size: 14px;
+                font-weight: 600;
+            }
+            QLabel[role="formula-preview"] {
+                font-size: 16px;
+                padding: 8px 12px;
+                min-height: 82px;
+            }
+            QPushButton[variant="primary"] {
+                min-height: 38px;
+                padding: 7px 14px;
+                font-size: 14px;
+            }
+            QPushButton[role="series-add"] {
+                font-size: 18px;
+                padding-bottom: 1px;
+            }
+            QPushButton[role="series-remove"] {
+                font-size: 15px;
+                padding-bottom: 1px;
+            }
+            QLineEdit[role="series-item"] {
+                padding-top: 0px;
+                padding-bottom: 0px;
             }
             QSplitter::handle {
                 background: #2a3549;
@@ -278,7 +416,13 @@ class RosenbrockWindow(QMainWindow):
 
         info_group = QGroupBox("Параметры расчёта")
         info_group.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
-        info_grid = create_parameter_grid(info_group)
+        info_grid = create_parameter_grid(
+            info_group,
+            label_min_width=136,
+            horizontal_spacing=8,
+            vertical_spacing=7,
+            margins=(16, 16, 16, 12),
+        )
 
         self._epsilon_row = DynamicSeriesInputRow(
             add_role="series-add",
@@ -288,6 +432,9 @@ class RosenbrockWindow(QMainWindow):
             field_widths=(EPSILON_INPUT_WIDTH,),
             control_button_size=CONTROL_BUTTON_SIZE,
             row_control_spacing=ROW_CONTROL_SPACING,
+            scroll_min_height=56,
+            scroll_max_height=60,
+            container_min_height=42,
         )
         self._epsilon_row.add_item("0.1")
 
@@ -301,11 +448,16 @@ class RosenbrockWindow(QMainWindow):
             row_control_spacing=ROW_CONTROL_SPACING,
             separator_text="—",
             separator_role="start-separator",
+            scroll_min_height=56,
+            scroll_max_height=60,
+            container_min_height=42,
         )
         self._start_row.add_item("0", "1")
 
-        add_parameter_row(info_grid, row=0, label="Точности ε", control=self._epsilon_row.row_widget)
-        add_parameter_row(info_grid, row=1, label="Стартовые точки", control=self._start_row.row_widget)
+        epsilon_label = add_parameter_row(info_grid, row=0, label="Точности ε", control=self._epsilon_row.row_widget)
+        start_label = add_parameter_row(info_grid, row=1, label="Стартовые точки", control=self._start_row.row_widget)
+        epsilon_label.setMinimumWidth(132)
+        start_label.setMinimumWidth(132)
 
         mode_group, _mode_layout = create_standard_group("Режим")
         self.mode_group = QButtonGroup(self)
@@ -320,6 +472,10 @@ class RosenbrockWindow(QMainWindow):
         )
         self.mode_buttons = {key: button for key, button in zip(("continuous", "discrete"), mode_buttons, strict=True)}
         _mode_layout.addWidget(mode_row)
+        mode_hint = QLabel("Параметры дискретного шага доступны только в дискретном режиме.")
+        mode_hint.setObjectName("SectionHint")
+        mode_hint.setWordWrap(True)
+        _mode_layout.addWidget(mode_hint)
 
         discrete_group = QGroupBox("Параметры дискретного шага")
         self._delta_step_input = QLineEdit("0.2")
@@ -327,13 +483,21 @@ class RosenbrockWindow(QMainWindow):
         self._beta_input = QLineEdit("-0.2")
         for widget in (self._delta_step_input, self._alpha_input, self._beta_input):
             widget.setMinimumWidth(96)
-        discrete_grid = create_parameter_grid(discrete_group, label_min_width=124)
-        add_parameter_row(discrete_grid, row=0, label="Δ0", control=self._delta_step_input)
-        add_parameter_row(discrete_grid, row=1, label="α", control=self._alpha_input)
-        add_parameter_row(discrete_grid, row=2, label="β", control=self._beta_input)
+        discrete_grid = create_parameter_grid(
+            discrete_group,
+            label_min_width=112,
+            horizontal_spacing=8,
+            vertical_spacing=7,
+            margins=(16, 16, 16, 12),
+        )
+        delta_label = add_parameter_row(discrete_grid, row=0, label="Δ0", control=self._delta_step_input)
+        alpha_label = add_parameter_row(discrete_grid, row=1, label="α", control=self._alpha_input)
+        beta_label = add_parameter_row(discrete_grid, row=2, label="β", control=self._beta_input)
+        for label in (delta_label, alpha_label, beta_label):
+            label.setMinimumWidth(112)
         self._discrete_group = discrete_group
 
-        run_button = create_primary_action_button(text="Рассчитать", on_click=self._run_clicked)
+        run_button = create_primary_action_button(text="Рассчитать", on_click=self._run_clicked, min_height=36)
 
         layout.addWidget(source_group)
         layout.addWidget(info_group)
@@ -433,6 +597,9 @@ class RosenbrockWindow(QMainWindow):
             on_clicked=self._on_plot_mode_selected,
         )
         self.plot_mode_buttons = {key: button for key, button in zip(mode_keys, mode_buttons, strict=True)}
+        for button in self.plot_mode_buttons.values():
+            button.setMinimumWidth(168)
+        mode_row_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         mode_layout.addWidget(mode_row_widget)
         mode_layout.addStretch(1)
 
@@ -462,7 +629,9 @@ class RosenbrockWindow(QMainWindow):
         self._sync_solver_mode_ui()
 
     def _sync_solver_mode_ui(self) -> None:
-        self._discrete_group.setVisible(self._solver_mode == "discrete")
+        is_discrete = self._solver_mode == "discrete"
+        self._discrete_group.setVisible(is_discrete)
+        self._discrete_group.setEnabled(is_discrete)
         self._set_steps_table_headers()
 
     def _set_formula_preview(self, formula_text: str) -> None:
@@ -821,74 +990,37 @@ class RosenbrockWindow(QMainWindow):
             mode = self._plot_mode
             if mode == "surface":
                 ax_surface = self.canvas.figure.add_subplot(1, 1, 1, projection="3d")
+                if hasattr(ax_surface, "set_proj_type"):
+                    ax_surface.set_proj_type("ortho")
                 z_clipped = self._build_surface_mesh(mesh_z)
                 ax_surface.plot_surface(
                     mesh_x,
                     mesh_y,
                     z_clipped,
                     cmap="turbo",
-                    alpha=0.9,
+                    alpha=0.86,
                     linewidth=0,
                     antialiased=True,
                 )
                 path_z = [evaluate_polynomial(batch_result.polynomial, point[0], point[1]) for point in run.trajectory]
                 z_span = max(float(np.nanmax(z_clipped) - np.nanmin(z_clipped)), 1.0)
-                z_offset = z_span * 0.02
-                lifted_path_z = [value + z_offset for value in path_z]
-                # Темный контур под основной линией для читаемости на любом colormap фоне.
-                ax_surface.plot(
-                    x_vals,
-                    y_vals,
-                    lifted_path_z,
-                    color="#121722",
-                    linewidth=5.2,
-                    marker="o",
-                    markersize=5.6,
-                    markerfacecolor="#121722",
-                    markeredgewidth=0.0,
-                )
-                ax_surface.plot(
-                    x_vals,
-                    y_vals,
-                    lifted_path_z,
-                    color="#ffffff",
-                    linewidth=3.0,
-                    marker="o",
-                    markersize=4.3,
-                    markerfacecolor="#ff4f87",
-                    markeredgecolor="#ffffff",
-                    markeredgewidth=0.7,
-                )
-                ax_surface.scatter(
-                    [x_vals[0]],
-                    [y_vals[0]],
-                    [lifted_path_z[0]],
-                    color="#2da3ff",
-                    edgecolors="#ffffff",
-                    linewidths=1.0,
-                    s=130,
-                    depthshade=False,
-                )
-                ax_surface.scatter(
-                    [x_vals[-1]],
-                    [y_vals[-1]],
-                    [lifted_path_z[-1]],
-                    color="#57d773",
-                    edgecolors="#ffffff",
-                    linewidths=1.0,
-                    s=130,
-                    depthshade=False,
-                )
-                ax_surface.set_title("3D поверхность + траектория")
+                lifted_path_z = [value + z_span * 0.02 for value in path_z]
+                _draw_surface_trajectory(ax_surface, x_vals, y_vals, lifted_path_z)
+                ax_surface.set_title("Поверхность и траектория")
                 ax_surface.set_xlabel("x1")
                 ax_surface.set_ylabel("x2")
                 ax_surface.set_zlabel("f(x1, x2)")
+                ax_surface.grid(False)
+                spans = _report_surface_aspect(x_max - x_min, y_max - y_min, z_span)
+                if hasattr(ax_surface, "set_box_aspect"):
+                    ax_surface.set_box_aspect(spans)
                 for axis in (ax_surface.xaxis, ax_surface.yaxis, ax_surface.zaxis):
                     pane = getattr(axis, "pane", None)
                     if pane is not None:
                         pane.set_facecolor((0.12, 0.16, 0.23, 0.45))
                 ax_surface.tick_params(colors="#c4cfdf")
-                ax_surface.view_init(elev=26, azim=-56)
+                elev, azim = _surface_view_angles(points)
+                ax_surface.view_init(elev=elev, azim=azim)
             else:
                 ax_contour = self.canvas.figure.add_subplot(1, 1, 1)
                 contour = ax_contour.contour(mesh_x, mesh_y, mesh_z, levels=24, cmap="turbo")
@@ -1015,105 +1147,74 @@ class RosenbrockWindow(QMainWindow):
 
         with dark_plot_context():
             figure = Figure(figsize=(9.0, 6.0), dpi=120)
-            figure.patch.set_facecolor("#171b24")
-            if mode == "surface":
-                ax_surface = figure.add_subplot(1, 1, 1, projection="3d")
-                z_clipped = self._build_surface_mesh(mesh_z)
-                ax_surface.plot_surface(
-                    mesh_x,
-                    mesh_y,
-                    z_clipped,
-                    cmap="turbo",
-                    alpha=0.72,
-                    linewidth=0,
-                    antialiased=True,
-                )
-                path_z = [evaluate_polynomial(batch_result.polynomial, point[0], point[1]) for point in run.trajectory]
-                z_span = max(float(np.nanmax(z_clipped) - np.nanmin(z_clipped)), 1.0)
-                z_offset = z_span * 0.08
-                lifted_path_z = [value + z_offset for value in path_z]
-                ax_surface.plot(
-                    x_vals,
-                    y_vals,
-                    lifted_path_z,
-                    color="#121722",
-                    linewidth=7.0,
-                    marker="o",
-                    markersize=6.6,
-                    markerfacecolor="#121722",
-                    markeredgewidth=0.0,
-                )
-                ax_surface.plot(
-                    x_vals,
-                    y_vals,
-                    lifted_path_z,
-                    color="#ff2d95",
-                    linewidth=4.2,
-                    marker="o",
-                    markersize=5.2,
-                    markerfacecolor="#ff4f87",
-                    markeredgecolor="#ffffff",
-                    markeredgewidth=1.0,
-                )
-                ax_surface.scatter(
-                    [x_vals[0]],
-                    [y_vals[0]],
-                    [lifted_path_z[0]],
-                    color="#2da3ff",
-                    edgecolors="#ffffff",
-                    linewidths=1.0,
-                    s=130,
-                    depthshade=False,
-                )
-                ax_surface.scatter(
-                    [x_vals[-1]],
-                    [y_vals[-1]],
-                    [lifted_path_z[-1]],
-                    color="#57d773",
-                    edgecolors="#ffffff",
-                    linewidths=1.0,
-                    s=130,
-                    depthshade=False,
-                )
-                ax_surface.set_title("3D поверхность + траектория")
-                ax_surface.set_xlabel("x1")
-                ax_surface.set_ylabel("x2")
-                ax_surface.set_zlabel("f(x1, x2)")
-                for axis in (ax_surface.xaxis, ax_surface.yaxis, ax_surface.zaxis):
-                    pane = getattr(axis, "pane", None)
-                    if pane is not None:
-                        pane.set_facecolor((0.12, 0.16, 0.23, 0.45))
-                ax_surface.tick_params(colors="#c4cfdf")
-                ax_surface.set_zlim(float(np.nanmin(z_clipped)), float(np.nanmax(z_clipped) + z_offset * 1.5))
-                ax_surface.view_init(elev=34, azim=-44)
-            else:
-                ax_contour = figure.add_subplot(1, 1, 1)
-                contour = ax_contour.contour(mesh_x, mesh_y, mesh_z, levels=24, cmap="turbo")
-                ax_contour.set_facecolor("#10141f")
-                ax_contour.clabel(contour, inline=True, fontsize=8, colors="#dce6f5")
-                ax_contour.plot(
-                    x_vals,
-                    y_vals,
-                    marker="o",
-                    color="#ffffff",
-                    linewidth=3.1,
-                    markersize=4.5,
-                    markerfacecolor="#ff4f87",
-                    markeredgewidth=0.0,
-                    zorder=3,
-                )
-                ax_contour.scatter([x_vals[0]], [y_vals[0]], color="#2da3ff", s=100, label="Старт", zorder=4)
-                ax_contour.scatter([x_vals[-1]], [y_vals[-1]], color="#57d773", s=100, label="Финиш", zorder=4)
-                ax_contour.set_title("Линии уровня + траектория")
-                ax_contour.set_xlabel("x1")
-                ax_contour.set_ylabel("x2")
-                ax_contour.set_aspect("equal", adjustable="box")
-                ax_contour.grid(True)
-                legend = ax_contour.legend(loc="upper right", framealpha=0.92)
-                for text in legend.get_texts():
-                    text.set_color("#e8f0ff")
+            try:
+                figure.patch.set_facecolor("#171b24")
+                if mode == "surface":
+                    ax_surface = figure.add_subplot(1, 1, 1, projection="3d")
+                    if hasattr(ax_surface, "set_proj_type"):
+                        ax_surface.set_proj_type("ortho")
+                    z_clipped = self._build_surface_mesh(mesh_z)
+                    ax_surface.plot_surface(
+                        mesh_x,
+                        mesh_y,
+                        z_clipped,
+                        cmap="turbo",
+                        alpha=0.68,
+                        linewidth=0,
+                        antialiased=True,
+                    )
+                    path_z = [evaluate_polynomial(batch_result.polynomial, point[0], point[1]) for point in run.trajectory]
+                    z_span = max(float(np.nanmax(z_clipped) - np.nanmin(z_clipped)), 1.0)
+                    lifted_path_z = [value + z_span * 0.08 for value in path_z]
+                    _draw_surface_trajectory(ax_surface, x_vals, y_vals, lifted_path_z)
+                    ax_surface.set_title("Поверхность и траектория")
+                    ax_surface.set_xlabel("x1")
+                    ax_surface.set_ylabel("x2")
+                    ax_surface.set_zlabel("f(x1, x2)")
+                    ax_surface.grid(False)
+                    spans = _report_surface_aspect(x_max - x_min, y_max - y_min, z_span)
+                    if hasattr(ax_surface, "set_box_aspect"):
+                        ax_surface.set_box_aspect(spans)
+                    for axis in (ax_surface.xaxis, ax_surface.yaxis, ax_surface.zaxis):
+                        pane = getattr(axis, "pane", None)
+                        if pane is not None:
+                            pane.set_facecolor((0.12, 0.16, 0.23, 0.45))
+                    ax_surface.tick_params(colors="#c4cfdf")
+                    surface_top = float(np.nanmax(z_clipped))
+                    z_span = max(float(np.nanmax(z_clipped) - np.nanmin(z_clipped)), 1.0)
+                    ax_surface.set_zlim(float(np.nanmin(z_clipped)), float(surface_top + z_span * 0.2))
+                    elev, azim = _surface_view_angles(points)
+                    ax_surface.view_init(elev=elev, azim=azim)
+                else:
+                    ax_contour = figure.add_subplot(1, 1, 1)
+                    contour = ax_contour.contour(mesh_x, mesh_y, mesh_z, levels=24, cmap="turbo")
+                    ax_contour.set_facecolor("#10141f")
+                    ax_contour.clabel(contour, inline=True, fontsize=8, colors="#dce6f5")
+                    ax_contour.plot(
+                        x_vals,
+                        y_vals,
+                        marker="o",
+                        color="#ffffff",
+                        linewidth=3.1,
+                        markersize=4.5,
+                        markerfacecolor="#ff4f87",
+                        markeredgewidth=0.0,
+                        zorder=3,
+                    )
+                    ax_contour.scatter([x_vals[0]], [y_vals[0]], color="#2da3ff", s=100, label="Старт", zorder=4)
+                    ax_contour.scatter([x_vals[-1]], [y_vals[-1]], color="#57d773", s=100, label="Финиш", zorder=4)
+                    ax_contour.set_title("Линии уровня + траектория")
+                    ax_contour.set_xlabel("x1")
+                    ax_contour.set_ylabel("x2")
+                    ax_contour.set_aspect("equal", adjustable="box")
+                    ax_contour.grid(True)
+                    legend = ax_contour.legend(loc="upper right", framealpha=0.92)
+                    for text in legend.get_texts():
+                        text.set_color("#e8f0ff")
 
-            figure.savefig(output_path, dpi=120, bbox_inches="tight")
+                figure.savefig(output_path, dpi=120, bbox_inches="tight")
+            finally:
+                figure.clf()
 
     def _evaluate_mesh(self, batch_result: BatchResult, mesh_x: np.ndarray, mesh_y: np.ndarray) -> np.ndarray:
         polynomial = batch_result.polynomial

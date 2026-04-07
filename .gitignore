@@ -208,3 +208,5 @@ __marimo__/
 AGENTS.md
 report/lr2_runs/*
 .DS_Store
+lr1/infrastructure/logs/*
+.serena/*

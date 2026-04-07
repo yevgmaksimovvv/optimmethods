@@ -43,6 +43,9 @@ class DynamicSeriesInputRow:
         remove_button_text: str = "−",
         separator_text: str | None = None,
         separator_role: str | None = None,
+        scroll_min_height: int = 72,
+        scroll_max_height: int = 76,
+        container_min_height: int = 56,
         min_items: int = 1,
         on_control_added: Callable[[QWidget], None] | None = None,
         on_control_removed: Callable[[QWidget], None] | None = None,
@@ -62,6 +65,9 @@ class DynamicSeriesInputRow:
         self._field_role = field_role
         self._separator_text = separator_text
         self._separator_role = separator_role
+        self._scroll_min_height = scroll_min_height
+        self._scroll_max_height = scroll_max_height
+        self._container_min_height = container_min_height
         self._min_items = min_items
         self._on_control_added = on_control_added
         self._on_control_removed = on_control_removed
@@ -79,8 +85,8 @@ class DynamicSeriesInputRow:
         self.scroll.setFrameShape(QScrollArea.NoFrame)
         self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.scroll.setMinimumHeight(72)
-        self.scroll.setMaximumHeight(76)
+        self.scroll.setMinimumHeight(self._scroll_min_height)
+        self.scroll.setMaximumHeight(self._scroll_max_height)
         self.scroll.setMinimumWidth(0)
         self.scroll.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
 
@@ -235,4 +241,4 @@ class DynamicSeriesInputRow:
         self.container.adjustSize()
         width = self.container.sizeHint().width()
         height = self.container.sizeHint().height()
-        self.container.resize(width, max(height, 56))
+        self.container.resize(width, max(height, self._container_min_height))
