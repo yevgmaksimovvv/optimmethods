@@ -118,7 +118,6 @@ METHOD_DEFAULTS = {
 DEFAULT_TIMEOUT_SECONDS = "3.0"
 DEFAULT_MIN_STEP = "1e-8"
 DEFAULT_GRADIENT_STEP = "1e-6"
-DEFAULT_MAX_STEP_EXPANSIONS = "16"
 
 
 @dataclass(frozen=True)
@@ -561,7 +560,6 @@ class GradientMethodsWindow(QMainWindow):
                 goal_raw=self._selected_goal(),
                 min_step_raw=DEFAULT_MIN_STEP,
                 gradient_step_raw=DEFAULT_GRADIENT_STEP,
-                max_step_expansions_raw=DEFAULT_MAX_STEP_EXPANSIONS,
             ),
         )
 
@@ -579,7 +577,6 @@ class GradientMethodsWindow(QMainWindow):
         goal_raw: str,
         min_step_raw: str,
         gradient_step_raw: str,
-        max_step_expansions_raw: str,
     ) -> RunPayload:
         if not expression:
             raise ValueError("Поле функции не должно быть пустым")
@@ -593,7 +590,6 @@ class GradientMethodsWindow(QMainWindow):
             goal_raw=goal_raw,
             min_step_raw=min_step_raw,
             gradient_step_raw=gradient_step_raw,
-            max_step_expansions_raw=max_step_expansions_raw,
         )
 
         if method == "gradient":
@@ -770,6 +766,10 @@ class GradientMethodsWindow(QMainWindow):
             )
             if record.cycle_start_point is not None:
                 self._add_report_row(form, "x<sub>k</sub>", self._math_text(self._format_point(record.cycle_start_point)))
+                if record.point == record.cycle_start_point:
+                    self._add_report_row(form, "Статус цикла", self._math_text("В начале цикла y<sub>1</sub> = x<sub>k</sub>."))
+                else:
+                    self._add_report_row(form, "Статус цикла", self._math_text("Внутри цикла x<sub>k</sub> фиксирован, меняется только y<sub>j</sub>."))
             self._add_report_row(form, "y<sub>j</sub>", self._math_text(self._format_point(record.point)))
             self._add_report_row(form, "F(y<sub>j</sub>)", self._math_text(self._format_scalar(record.value)))
             self._add_report_row(
@@ -782,6 +782,11 @@ class GradientMethodsWindow(QMainWindow):
                     form,
                     "s<sub>j</sub>",
                     self._math_text(self._format_vector_block(record.direction, scalar_formatter=self._format_scalar)),
+                )
+                self._add_report_row(
+                    form,
+                    "Построение s<sub>j</sub>",
+                    self._math_text(self._format_conjugate_direction_formula(record)),
                 )
             if record.beta is not None:
                 self._add_report_row(form, "β<sub>j</sub>", self._math_text(self._format_scalar(record.beta)))
@@ -799,6 +804,14 @@ class GradientMethodsWindow(QMainWindow):
                     "F(y<sub>j+1</sub>)",
                     self._math_text(self._format_scalar(record.next_value)),
                 )
+                if record.restart_direction:
+                    self._add_report_row(
+                        form,
+                        "Переход цикла",
+                        self._math_text(
+                            f"x<sub>{cycle_index + 1}</sub> = y<sub>{direction_index + 1}</sub> = {self._format_point(record.next_point)}"
+                        ),
+                    )
             else:
                 self._add_report_row(form, "Переход", self._math_text("Шаг не выполнен"))
             self._add_report_row(form, "Комментарий", self._math_text(note))
@@ -893,10 +906,8 @@ class GradientMethodsWindow(QMainWindow):
             return f"Шаг h = {self._format_step(record.step_size)} уменьшился."
         if decision == "accepted_as_is":
             return f"Шаг h = {self._format_step(record.step_size)} выбран сразу и принят."
-        if decision == "accepted_after_expansion":
-            return f"Шаг h = {self._format_step(record.step_size)} получен после увеличения пробного шага и принят."
         if decision == "accepted_after_reduction":
-            return f"Шаг h = {self._format_step(record.step_size)} получен после уменьшения пробного шага и принят."
+            return f"Шаг h = {self._format_step(record.step_size)} получен после уменьшения шага и принят."
         return f"Шаг h = {self._format_step(record.step_size)} принят."
 
     def _conjugate_step_note(self, record: IterationRecord, result: OptimizationResult) -> str:
@@ -906,16 +917,28 @@ class GradientMethodsWindow(QMainWindow):
             return "Улучшающий шаг не найден, метод остановлен."
         parts: list[str] = [f"Найден шаг λ = {self._format_step(record.step_size)}."]
         if record.beta is not None:
-            parts.append(f"β = {self._format_scalar(record.beta)}.")
+            parts.append(f"Направление пересчитано через β = {self._format_scalar(record.beta)}.")
         if record.restart_direction:
-            parts.append("Завершён цикл направлений, выполнен переход к следующему x_k.")
+            parts.append("Это последний шаг цикла: после него x<sub>k+1</sub> = y<sub>j+1</sub>.")
         return " ".join(parts)
+
+    def _format_conjugate_direction_formula(self, record: IterationRecord) -> str:
+        if record.direction is None:
+            return "Направление не строилось."
+        direction_text = self._format_vector_block(record.direction, scalar_formatter=self._format_scalar)
+        gradient_text = self._format_vector_block(record.gradient, scalar_formatter=self._format_scalar)
+        if record.beta is None:
+            return f"s<sub>1</sub> = ∇F(y<sub>1</sub>) = {gradient_text}."
+        return (
+            f"s<sub>j</sub> = ∇F(y<sub>j</sub>) + β<sub>j</sub>·s<sub>j-1</sub> = {direction_text}, "
+            f"где ∇F(y<sub>j</sub>) = {gradient_text}."
+        )
 
     @staticmethod
     def _format_method_title(method_name: str) -> str:
         labels = {
             "gradient_ascent": "Градиентный метод первого порядка",
-            "conjugate_gradient_ascent": "Метод сопряжённых градиентов Флетчера-Ривса",
+            "conjugate_gradient_ascent": "Метод сопряжённых градиентов",
         }
         return labels.get(method_name, method_name)
 

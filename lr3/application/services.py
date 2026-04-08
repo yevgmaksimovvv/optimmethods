@@ -53,7 +53,6 @@ def build_config(
     goal_raw: str,
     min_step_raw: str = "1e-8",
     gradient_step_raw: str = "1e-6",
-    max_step_expansions_raw: str = "16",
 ) -> MethodConfig:
     """Валидирует и строит конфиг метода."""
     epsilon = parse_localized_float(epsilon_raw, "epsilon")
@@ -63,7 +62,6 @@ def build_config(
     goal = _parse_goal(goal_raw)
     min_step = parse_localized_float(min_step_raw, "min_step")
     gradient_step = parse_localized_float(gradient_step_raw, "gradient_step")
-    max_step_expansions = parse_int(max_step_expansions_raw, "max_step_expansions")
 
     if epsilon <= 0:
         raise ValueError("epsilon должен быть > 0")
@@ -77,8 +75,6 @@ def build_config(
         raise ValueError("min_step должен быть > 0")
     if gradient_step <= 0:
         raise ValueError("gradient_step должен быть > 0")
-    if max_step_expansions <= 0:
-        raise ValueError("max_step_expansions должен быть > 0")
 
     return MethodConfig(
         epsilon=epsilon,
@@ -88,7 +84,6 @@ def build_config(
         timeout_seconds=timeout_seconds,
         goal=goal,
         gradient_step=gradient_step,
-        max_step_expansions=max_step_expansions,
     )
 
 

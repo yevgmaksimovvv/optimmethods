@@ -34,7 +34,6 @@ def test_build_config_happy_path() -> None:
         goal_raw="max",
         min_step_raw="1e-8",
         gradient_step_raw="1e-6",
-        max_step_expansions_raw="16",
     )
 
     assert config.epsilon == 1e-5
@@ -44,7 +43,6 @@ def test_build_config_happy_path() -> None:
     assert config.goal == "max"
     assert config.min_step == 1e-8
     assert config.gradient_step == 1e-6
-    assert config.max_step_expansions == 16
 
 
 @pytest.mark.parametrize(
@@ -131,17 +129,6 @@ def test_build_config_rejects_invalid_primary_parameters(kwargs: dict[str, str],
                 "gradient_step_raw": "0",
             },
             "gradient_step должен быть > 0",
-        ),
-        (
-            {
-                "epsilon_raw": "1e-5",
-                "max_iterations_raw": "250",
-                "initial_step_raw": "0.1",
-                "timeout_raw": "2.5",
-                "goal_raw": "max",
-                "max_step_expansions_raw": "0",
-            },
-            "max_step_expansions должен быть > 0",
         ),
     ),
 )

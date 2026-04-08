@@ -10,7 +10,6 @@ Hessian2D = tuple[tuple[float, float], tuple[float, float]]
 Goal = Literal["min", "max"]
 GradientStepDecision = Literal[
     "accepted_as_is",
-    "accepted_after_expansion",
     "accepted_after_reduction",
     "precision_reached",
     "no_improving_step",
@@ -28,7 +27,6 @@ class MethodConfig:
     timeout_seconds: float
     goal: Goal
     gradient_step: float
-    max_step_expansions: int
 
 
 @dataclass(frozen=True)

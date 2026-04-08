@@ -6,7 +6,7 @@ import os
 
 from PySide6.QtWidgets import QApplication, QLabel
 
-from lr3.application.services import build_config, run_gradient
+from lr3.application.services import build_config, run_conjugate, run_gradient
 from lr3.domain.expression import analyze_local_extremum, compile_objective
 from lr3.domain.models import IterationRecord, OptimizationResult
 from lr3.ui.window import GradientMethodsWindow, RunPayload
@@ -140,17 +140,13 @@ def test_lr3_gradient_step_comment_names_the_accepted_step() -> None:
                 value=0.0,
                 gradient=(1.0, -2.0),
                 step_size=0.4,
-                gradient_step_decision="accepted_after_expansion",
+                gradient_step_decision="accepted_as_is",
             ),
         ),
         success=True,
         stop_reason="gradient_norm_reached",
     )
 
-    note_up = window._gradient_step_note(
-        IterationRecord(k=0, point=(0.0, 0.0), value=0.0, gradient=(1.0, -2.0), step_size=0.4, gradient_step_decision="accepted_after_expansion"),
-        result,
-    )
     note_down = window._gradient_step_note(
         IterationRecord(k=0, point=(0.0, 0.0), value=0.0, gradient=(1.0, -2.0), step_size=0.05, gradient_step_decision="accepted_after_reduction"),
         result,
@@ -160,17 +156,17 @@ def test_lr3_gradient_step_comment_names_the_accepted_step() -> None:
         result,
     )
     note_unchanged = window._gradient_step_note(
-        IterationRecord(k=1, point=(0.0, 0.0), value=0.0, gradient=(1.0, -2.0), step_size=0.4, gradient_step_decision="accepted_after_expansion"),
+        IterationRecord(k=1, point=(0.0, 0.0), value=0.0, gradient=(1.0, -2.0), step_size=0.4, gradient_step_decision="accepted_as_is"),
         result,
         previous_step_size=0.4,
     )
     note_grown = window._gradient_step_note(
-        IterationRecord(k=1, point=(0.0, 0.0), value=0.0, gradient=(1.0, -2.0), step_size=0.8, gradient_step_decision="accepted_after_expansion"),
+        IterationRecord(k=1, point=(0.0, 0.0), value=0.0, gradient=(1.0, -2.0), step_size=0.8, gradient_step_decision="accepted_as_is"),
         result,
         previous_step_size=0.4,
     )
     note_reduced = window._gradient_step_note(
-        IterationRecord(k=1, point=(0.0, 0.0), value=0.0, gradient=(1.0, -2.0), step_size=0.4, gradient_step_decision="accepted_after_expansion"),
+        IterationRecord(k=1, point=(0.0, 0.0), value=0.0, gradient=(1.0, -2.0), step_size=0.4, gradient_step_decision="accepted_as_is"),
         result,
         previous_step_size=0.8,
     )
@@ -179,8 +175,7 @@ def test_lr3_gradient_step_comment_names_the_accepted_step() -> None:
         result,
     )
 
-    assert note_up == "Шаг h = 0.4 получен после увеличения пробного шага и принят."
-    assert note_down == "Шаг h = 0.05 получен после уменьшения пробного шага и принят."
+    assert note_down == "Шаг h = 0.05 получен после уменьшения шага и принят."
     assert note_same == "Шаг h = 0.1 выбран сразу и принят."
     assert note_unchanged == "Шаг h = 0.4 не изменился."
     assert note_grown == "Шаг h = 0.8 увеличился."
@@ -216,4 +211,37 @@ def test_lr3_gradient_iteration_card_marks_h_as_accepted_step() -> None:
 
     assert any("Принятый шаг h<sub>k</sub>" in text for text in texts)
     assert any("Шаг h =" in text for text in texts)
-    assert any("не изменился" in text for text in texts)
+    assert any(("выбран сразу и принят" in text) or ("получен после уменьшения шага и принят" in text) for text in texts)
+
+
+def test_lr3_conjugate_iteration_cards_explain_cycle_transition_and_direction_update() -> None:
+    _app()
+    window = GradientMethodsWindow()
+    config = build_config(
+        epsilon_raw="1e-6",
+        max_iterations_raw="300",
+        initial_step_raw="0.2",
+        timeout_raw="2.0",
+        goal_raw="max",
+    )
+    result, metrics = run_conjugate(
+        expression="-2 - x1 - 2*x2 - 0.1*x1**2 - 100*x2**2",
+        start_point=(1.0, 1.0),
+        config=config,
+    )
+    payload = RunPayload(
+        expression="-2 - x1 - 2*x2 - 0.1*x1**2 - 100*x2**2",
+        config=config,
+        result=result,
+        metrics=metrics,
+    )
+
+    cards = window._build_conjugate_iteration_cards(payload)
+    texts = [label.text() for card in cards for label in card.findChildren(QLabel)]
+
+    assert any("В начале цикла y<sub>1</sub> = x<sub>k</sub>." in text for text in texts)
+    assert any("Внутри цикла x<sub>k</sub> фиксирован, меняется только y<sub>j</sub>." in text for text in texts)
+    assert any("s<sub>1</sub> = ∇F(y<sub>1</sub>)" in text for text in texts)
+    assert any("s<sub>j</sub> = ∇F(y<sub>j</sub>) + β<sub>j</sub>·s<sub>j-1</sub>" in text for text in texts)
+    assert any("x<sub>2</sub> = y<sub>3</sub>" in text for text in texts)
+    assert any("Это последний шаг цикла: после него x<sub>k+1</sub> = y<sub>j+1</sub>." in text for text in texts)

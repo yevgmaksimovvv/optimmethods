@@ -34,7 +34,6 @@ def _config(*, goal: str) -> MethodConfig:
         timeout_raw="3.0",
         goal_raw=goal,
         gradient_step_raw="1e-6",
-        max_step_expansions_raw="18",
     )
 
 

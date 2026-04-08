@@ -20,7 +20,6 @@ def _config(
     goal: str = "max",
     min_step: float = 1e-8,
     gradient_step: float = 1e-6,
-    max_step_expansions: int = 16,
 ) -> MethodConfig:
     return MethodConfig(
         epsilon=epsilon,
@@ -30,7 +29,6 @@ def _config(
         timeout_seconds=timeout_seconds,
         goal=goal,
         gradient_step=gradient_step,
-        max_step_expansions=max_step_expansions,
     )
 
 
@@ -113,7 +111,7 @@ def test_conjugate_gradient_history_carries_step_metadata() -> None:
     record = result.records[0]
 
     assert record.direction is not None
-    assert record.beta is not None
+    assert record.beta is None
     assert record.next_point is not None
     assert record.next_value is not None
     assert record.cycle_index == 1
@@ -128,9 +126,11 @@ def test_conjugate_gradient_history_carries_step_metadata() -> None:
         )
     )
     assert record.next_value == pytest.approx(objective(record.next_point))
+    assert not math.isclose(record.point[0], record.next_point[0], abs_tol=1e-9)
+    assert not math.isclose(record.point[1], record.next_point[1], abs_tol=1e-9)
 
 
-def test_conjugate_gradient_restarts_after_dimension_steps() -> None:
+def test_conjugate_gradient_uses_fletcher_reeves_direction_update() -> None:
     def objective(point: Point2D) -> float:
         x1, x2 = point
         return -(x1 - 3.0) ** 2 - 2.0 * (x2 - 4.0) ** 2
@@ -147,6 +147,26 @@ def test_conjugate_gradient_restarts_after_dimension_steps() -> None:
     assert second_record.cycle_index == 1
     assert second_record.direction_index == 2
     assert second_record.restart_direction is True
+    assert second_record.beta is not None
+    expected_direction = (
+        second_record.gradient[0] + second_record.beta * first_record.direction[0],
+        second_record.gradient[1] + second_record.beta * first_record.direction[1],
+    )
+    assert second_record.direction == pytest.approx(expected_direction, rel=1e-5, abs=1e-5)
+
+
+def test_conjugate_gradient_restarts_after_dimension_steps() -> None:
+    def objective(point: Point2D) -> float:
+        x1, x2 = point
+        return -(x1 - 3.0) ** 2 - 2.0 * (x2 - 4.0) ** 2
+
+    result = conjugate_gradient_ascent(objective, (0.0, 0.0), _config(initial_step=0.2))
+
+    assert len(result.records) >= 3
+    restart_record = result.records[2]
+
+    assert restart_record.cycle_index == 2
+    assert restart_record.direction_index == 1
 
 
 def test_gradient_ascent_stops_at_iteration_limit() -> None:
@@ -201,3 +221,33 @@ def test_gradient_ascent_does_not_fake_success_on_unbounded_maximum() -> None:
     assert not result.success
     assert result.stop_reason != "gradient_norm_reached"
     assert result.iterations_count > 0
+
+
+def test_gradient_ascent_uses_configured_step_when_it_improves() -> None:
+    def objective(point: Point2D) -> float:
+        x1, x2 = point
+        return x1**2 + x2**2 - x1 * x2 + x1 - 2.0 * x2
+
+    result = gradient_ascent(
+        objective,
+        start_point=(0.0, 0.0),
+        config=_config(goal="min", initial_step=0.1, max_iterations=1),
+    )
+
+    assert result.records[0].step_size == pytest.approx(0.1)
+    assert result.records[0].gradient_step_decision == "accepted_as_is"
+
+
+def test_gradient_ascent_halves_step_until_it_finds_improvement() -> None:
+    def objective(point: Point2D) -> float:
+        x1, x2 = point
+        return x1**2 + x2**2
+
+    result = gradient_ascent(
+        objective,
+        start_point=(1.0, 0.0),
+        config=_config(goal="min", initial_step=2.0, max_iterations=1),
+    )
+
+    assert result.records[0].step_size == pytest.approx(0.5, abs=1e-6)
+    assert result.records[0].gradient_step_decision == "accepted_after_reduction"
