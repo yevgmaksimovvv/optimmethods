@@ -6,8 +6,9 @@ import os
 
 from PySide6.QtWidgets import QApplication, QLabel
 
+from lr3.application.services import build_config, run_gradient
 from lr3.domain.expression import analyze_local_extremum
-from lr3.ui.window import GradientMethodsWindow
+from lr3.ui.window import GradientMethodsWindow, RunPayload
 
 
 def _app() -> QApplication:
@@ -92,3 +93,31 @@ def test_lr3_analysis_card_renders_symbolic_hessian() -> None:
     assert any("Вывод:" in text for text in texts)
     assert any("Локальный минимум" in text for text in texts)
     assert any("Согласование" in text for text in texts)
+
+
+def test_lr3_plot_render_handles_unbounded_maximum_without_crashing() -> None:
+    _app()
+    window = GradientMethodsWindow()
+    config = build_config(
+        epsilon_raw="1e-6",
+        max_iterations_raw="250",
+        initial_step_raw="0.1",
+        timeout_raw="2.0",
+        goal_raw="max",
+    )
+    result, metrics = run_gradient(
+        expression="x1**2 + x2**2 - x1*x2 + x1 - 2*x2",
+        start_point=(0.0, 0.0),
+        config=config,
+    )
+
+    payload = RunPayload(
+        expression="x1**2 + x2**2 - x1*x2 + x1 - 2*x2",
+        config=config,
+        result=result,
+        metrics=metrics,
+    )
+
+    window._render_plot(payload)
+
+    assert window.canvas.figure.axes

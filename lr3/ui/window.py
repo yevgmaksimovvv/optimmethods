@@ -1156,37 +1156,54 @@ class GradientMethodsWindow(QMainWindow):
             ax_contour = figure.add_subplot(121)
             ax_convergence = figure.add_subplot(122)
 
-            xs = [item.point[0] for item in result.records]
-            ys = [item.point[1] for item in result.records]
+            xs = [item.point[0] for item in result.records if math.isfinite(item.point[0]) and math.isfinite(item.point[1])]
+            ys = [item.point[1] for item in result.records if math.isfinite(item.point[0]) and math.isfinite(item.point[1])]
             if not xs:
                 xs = [result.start_point[0], result.optimum_point[0]]
                 ys = [result.start_point[1], result.optimum_point[1]]
 
-            margin = 1.0
-            x_min = min(xs) - margin
-            x_max = max(xs) + margin
-            y_min = min(ys) - margin
-            y_max = max(ys) + margin
+            x_min, x_max, y_min, y_max = self._build_plot_window(
+                result=result,
+                analysis=analysis,
+                fallback_points=tuple(zip(xs, ys, strict=True)) if xs else (),
+            )
 
             grid_x = np.linspace(x_min, x_max, 80)
             grid_y = np.linspace(y_min, y_max, 80)
             x_mesh, y_mesh = np.meshgrid(grid_x, grid_y)
-            z_mesh = np.zeros_like(x_mesh)
+            z_mesh = np.full_like(x_mesh, np.nan, dtype=float)
 
             for i in range(x_mesh.shape[0]):
                 for j in range(x_mesh.shape[1]):
-                    z_mesh[i, j] = objective((float(x_mesh[i, j]), float(y_mesh[i, j])))
+                    try:
+                        value = objective((float(x_mesh[i, j]), float(y_mesh[i, j])))
+                    except OverflowError:
+                        continue
+                    if math.isfinite(value):
+                        z_mesh[i, j] = value
 
-            contour = ax_contour.contourf(x_mesh, y_mesh, z_mesh, levels=25, cmap="viridis")
-            figure.colorbar(contour, ax=ax_contour)
-            ax_contour.plot(xs, ys, "r.-", linewidth=2, markersize=6)
-            ax_contour.scatter([xs[0]], [ys[0]], c="white", edgecolors="black", label="start")
-            ax_contour.scatter(
-                [result.optimum_point[0]],
-                [result.optimum_point[1]],
-                c="#ff8c42" if goal == "max" else "#4fc3f7",
-                label=f"итог ({goal_label})",
-            )
+            finite_z = z_mesh[np.isfinite(z_mesh)]
+            if finite_z.size >= 2:
+                low = float(np.percentile(finite_z, 5))
+                high = float(np.percentile(finite_z, 95))
+                if math.isfinite(low) and math.isfinite(high) and high > low:
+                    contour = ax_contour.contourf(x_mesh, y_mesh, np.ma.masked_invalid(z_mesh), levels=25, cmap="viridis")
+                    figure.colorbar(contour, ax=ax_contour)
+                else:
+                    ax_contour.text(0.5, 0.5, "График недоступен для выбранного масштаба", ha="center", va="center", transform=ax_contour.transAxes)
+            else:
+                ax_contour.text(0.5, 0.5, "График недоступен для выбранного масштаба", ha="center", va="center", transform=ax_contour.transAxes)
+
+            if xs and ys:
+                ax_contour.plot(xs, ys, "r.-", linewidth=2, markersize=6)
+                ax_contour.scatter([xs[0]], [ys[0]], c="white", edgecolors="black", label="start")
+            if math.isfinite(result.optimum_point[0]) and math.isfinite(result.optimum_point[1]):
+                ax_contour.scatter(
+                    [result.optimum_point[0]],
+                    [result.optimum_point[1]],
+                    c="#ff8c42" if goal == "max" else "#4fc3f7",
+                    label=f"итог ({goal_label})",
+                )
             if analysis.stationary_points:
                 theoretical = analysis.stationary_points[0]
                 ax_contour.scatter(
@@ -1201,18 +1218,57 @@ class GradientMethodsWindow(QMainWindow):
             ax_contour.set_title(f"Траектория поиска {goal_label} на линии уровня")
             ax_contour.set_xlabel("x1")
             ax_contour.set_ylabel("x2")
+            ax_contour.set_xlim(x_min, x_max)
+            ax_contour.set_ylim(y_min, y_max)
             ax_contour.legend()
 
-            values = [record.value for record in result.records]
+            values = [record.value for record in result.records if math.isfinite(record.value)]
             if not values:
                 values = [result.optimum_value]
-            ax_convergence.plot(range(len(values)), values, "b-o", linewidth=2, markersize=4)
+            if math.isfinite(values[0]):
+                ax_convergence.plot(range(len(values)), values, "b-o", linewidth=2, markersize=4)
+            else:
+                ax_convergence.text(0.5, 0.5, "Нет конечных значений для графика сходимости", ha="center", va="center", transform=ax_convergence.transAxes)
             ax_convergence.set_title(f"Сходимость при поиске {goal_label}")
             ax_convergence.set_xlabel("k")
             ax_convergence.set_ylabel("F(x)")
             ax_convergence.grid(True, alpha=0.3)
 
             self.canvas.draw()
+
+    def _build_plot_window(
+        self,
+        *,
+        result: OptimizationResult,
+        analysis: ExtremumAnalysis,
+        fallback_points: tuple[Point2D, ...],
+    ) -> tuple[float, float, float, float]:
+        """Выбирает безопасное окно для графика без разлёта в inf/nan."""
+        if analysis.stationary_points:
+            center_x, center_y = analysis.stationary_points[0]
+            span = 6.0
+        else:
+            finite_points = [point for point in fallback_points if math.isfinite(point[0]) and math.isfinite(point[1])]
+            if finite_points:
+                center_x = sum(point[0] for point in finite_points) / len(finite_points)
+                center_y = sum(point[1] for point in finite_points) / len(finite_points)
+                span = max(
+                    max((abs(point[0] - center_x) for point in finite_points), default=1.0),
+                    max((abs(point[1] - center_y) for point in finite_points), default=1.0),
+                    3.0,
+                ) * 2.0
+            else:
+                center_x, center_y = result.start_point
+                span = 6.0
+
+        span = min(max(span, 3.0), 20.0)
+        half_span = span / 2.0
+        return (
+            center_x - half_span,
+            center_x + half_span,
+            center_y - half_span,
+            center_y + half_span,
+        )
 
     def _clear_plot(self) -> None:
         self.plot_context_label.hide()
