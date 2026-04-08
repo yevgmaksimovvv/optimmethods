@@ -40,6 +40,9 @@ class IterationRecord:
     value: float
     gradient: Point2D
     step_size: float
+    cycle_index: int | None = None
+    direction_index: int | None = None
+    cycle_start_point: Point2D | None = None
     gradient_step_decision: GradientStepDecision | None = None
     direction: Point2D | None = None
     beta: float | None = None

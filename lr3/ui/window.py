@@ -762,34 +762,41 @@ class GradientMethodsWindow(QMainWindow):
         cards: list[QWidget] = []
         for index, record in enumerate(result.records):
             note = self._conjugate_step_note(record, result)
-            card, form = self._create_report_card(f"Итерация {index + 1}", object_name="IterationCard")
-            self._add_report_row(form, "Текущая точка", self._math_text(self._format_point(record.point)))
-            self._add_report_row(form, "F(M<sub>k</sub>)", self._math_text(self._format_scalar(record.value)))
+            cycle_index = record.cycle_index if record.cycle_index is not None else 1
+            direction_index = record.direction_index if record.direction_index is not None else index + 1
+            card, form = self._create_report_card(
+                f"Цикл {cycle_index}, шаг {direction_index}",
+                object_name="IterationCard",
+            )
+            if record.cycle_start_point is not None:
+                self._add_report_row(form, "x<sub>k</sub>", self._math_text(self._format_point(record.cycle_start_point)))
+            self._add_report_row(form, "y<sub>j</sub>", self._math_text(self._format_point(record.point)))
+            self._add_report_row(form, "F(y<sub>j</sub>)", self._math_text(self._format_scalar(record.value)))
             self._add_report_row(
                 form,
-                "∇F(M<sub>k</sub>)",
+                "∇F(y<sub>j</sub>)",
                 self._math_text(self._format_vector_block(record.gradient, scalar_formatter=self._format_scalar)),
             )
             if record.direction is not None:
                 self._add_report_row(
                     form,
-                    "s<sub>k</sub>",
+                    "s<sub>j</sub>",
                     self._math_text(self._format_vector_block(record.direction, scalar_formatter=self._format_scalar)),
                 )
             if record.beta is not None:
-                self._add_report_row(form, "β<sub>k</sub>", self._math_text(self._format_scalar(record.beta)))
-            self._add_report_row(form, "λ<sub>k</sub>", self._math_text(self._format_step(record.step_size)))
+                self._add_report_row(form, "β<sub>j</sub>", self._math_text(self._format_scalar(record.beta)))
+            self._add_report_row(form, "λ<sub>j</sub>", self._math_text(self._format_step(record.step_size)))
             if record.next_point is not None and record.next_value is not None:
                 self._add_report_row(
                     form,
-                    f"M<sub>{index + 1}</sub>",
+                    "y<sub>j+1</sub>",
                     self._math_text(
-                        f"M<sub>{index + 1}</sub> = M<sub>{index}</sub> + λ<sub>{index}</sub>·s<sub>{index}</sub> = {self._format_point(record.next_point)}"
+                        f"y<sub>{direction_index + 1}</sub> = y<sub>{direction_index}</sub> + λ<sub>{direction_index}</sub>·s<sub>{direction_index}</sub> = {self._format_point(record.next_point)}"
                     ),
                 )
                 self._add_report_row(
                     form,
-                    f"F(M<sub>{index + 1}</sub>)",
+                    "F(y<sub>j+1</sub>)",
                     self._math_text(self._format_scalar(record.next_value)),
                 )
             else:
@@ -901,7 +908,7 @@ class GradientMethodsWindow(QMainWindow):
         if record.beta is not None:
             parts.append(f"β = {self._format_scalar(record.beta)}.")
         if record.restart_direction:
-            parts.append("Выполнен перезапуск направления.")
+            parts.append("Завершён цикл направлений, выполнен переход к следующему x_k.")
         return " ".join(parts)
 
     @staticmethod
