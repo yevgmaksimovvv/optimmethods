@@ -8,6 +8,13 @@ from typing import Literal
 Point2D = tuple[float, float]
 Hessian2D = tuple[tuple[float, float], tuple[float, float]]
 Goal = Literal["min", "max"]
+GradientStepDecision = Literal[
+    "accepted_as_is",
+    "accepted_after_expansion",
+    "accepted_after_reduction",
+    "precision_reached",
+    "no_improving_step",
+]
 
 
 @dataclass(frozen=True)
@@ -33,6 +40,7 @@ class IterationRecord:
     value: float
     gradient: Point2D
     step_size: float
+    gradient_step_decision: GradientStepDecision | None = None
     direction: Point2D | None = None
     beta: float | None = None
     next_point: Point2D | None = None

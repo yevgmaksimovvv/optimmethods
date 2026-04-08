@@ -6,7 +6,7 @@ import math
 import time
 from collections.abc import Callable
 
-from lr3.domain.models import Goal, IterationRecord, MethodConfig, OptimizationResult, Point2D
+from lr3.domain.models import Goal, GradientStepDecision, IterationRecord, MethodConfig, OptimizationResult, Point2D
 
 ObjectiveFn = Callable[[Point2D], float]
 
@@ -49,7 +49,7 @@ def _line_search(
     min_step: float,
     expand_limit: int,
     maximize: bool,
-) -> tuple[Point2D, float, float, bool]:
+) -> tuple[Point2D, float, float, bool, GradientStepDecision | None]:
     """Линейный поиск шага вдоль направления для max/min цели."""
     current_value = objective(point)
     best_point = point
@@ -72,7 +72,9 @@ def _line_search(
             break
 
     if best_step > 0.0:
-        return best_point, best_value, best_step, True
+        if math.isclose(best_step, initial_step, rel_tol=1e-9, abs_tol=1e-12):
+            return best_point, best_value, best_step, True, "accepted_as_is"
+        return best_point, best_value, best_step, True, "accepted_after_expansion"
 
     step = max(initial_step, min_step)
     while step >= min_step:
@@ -82,10 +84,12 @@ def _line_search(
         except OverflowError:
             break
         if (maximize and candidate_value > current_value) or (not maximize and candidate_value < current_value):
-            return candidate, candidate_value, step, True
+            if math.isclose(step, initial_step, rel_tol=1e-9, abs_tol=1e-12):
+                return candidate, candidate_value, step, True, "accepted_as_is"
+            return candidate, candidate_value, step, True, "accepted_after_reduction"
         step /= 2.0
 
-    return point, current_value, 0.0, False
+    return point, current_value, 0.0, False, None
 
 
 def gradient_ascent(
@@ -116,7 +120,16 @@ def gradient_ascent(
         gradient = finite_difference_gradient(objective, point, config.gradient_step)
         value = objective(point)
         grad_norm = _vector_norm(gradient)
-        records.append(IterationRecord(k=k, point=point, value=value, gradient=gradient, step_size=0.0))
+        records.append(
+            IterationRecord(
+                k=k,
+                point=point,
+                value=value,
+                gradient=gradient,
+                step_size=0.0,
+                gradient_step_decision="precision_reached" if grad_norm <= config.epsilon else None,
+            )
+        )
 
         if grad_norm <= config.epsilon:
             return OptimizationResult(
@@ -131,7 +144,7 @@ def gradient_ascent(
             )
 
         direction = (multiplier * gradient[0], multiplier * gradient[1])
-        new_point, new_value, step_size, improved = _line_search(
+        new_point, new_value, step_size, improved, step_decision = _line_search(
             objective=objective,
             point=point,
             direction=direction,
@@ -147,6 +160,7 @@ def gradient_ascent(
             value=value,
             gradient=gradient,
             step_size=step_size,
+            gradient_step_decision=step_decision if improved else "no_improving_step",
         )
 
         if not improved:
@@ -233,7 +247,7 @@ def conjugate_gradient_ascent(
                 stop_reason="gradient_norm_reached",
             )
 
-        new_point, new_value, step_size, improved = _line_search(
+        new_point, new_value, step_size, improved, _ = _line_search(
             objective=objective,
             point=current_point,
             direction=current_direction,

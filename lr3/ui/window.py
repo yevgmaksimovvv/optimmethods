@@ -715,6 +715,7 @@ class GradientMethodsWindow(QMainWindow):
         result = payload.result
         cards: list[QWidget] = []
         direction_multiplier = -1.0 if payload.config.goal == "min" else 1.0
+        previous_step_size: float | None = None
         for record in result.records:
             has_step = record.step_size > 0.0
             step_direction = (
@@ -724,7 +725,7 @@ class GradientMethodsWindow(QMainWindow):
             )
             new_point = self._translate_point(record.point, step_direction, record.step_size) if step_direction is not None else None
             new_value = objective(new_point) if new_point is not None else None
-            note = self._gradient_step_note(record.step_size, payload.config.initial_step, result)
+            note = self._gradient_step_note(record, result, previous_step_size)
             card, form = self._create_report_card(f"Итерация {record.k + 1}", object_name="IterationCard")
             self._add_report_row(form, "Текущая точка", self._math_text(self._format_point(record.point)))
             self._add_report_row(form, "F(M<sub>k</sub>)", self._math_text(self._format_scalar(record.value)))
@@ -733,7 +734,7 @@ class GradientMethodsWindow(QMainWindow):
                 "∇F(M<sub>k</sub>)",
                 self._math_text(self._format_vector_block(record.gradient, scalar_formatter=self._format_scalar)),
             )
-            self._add_report_row(form, "h<sub>k</sub>", self._math_text(self._format_step(record.step_size)))
+            self._add_report_row(form, "Принятый шаг h<sub>k</sub>", self._math_text(self._format_step(record.step_size)))
             if new_point is not None and new_value is not None:
                 operator = "+" if payload.config.goal == "max" else "-"
                 self._add_report_row(
@@ -752,6 +753,8 @@ class GradientMethodsWindow(QMainWindow):
                 self._add_report_row(form, "Переход", self._math_text("Шаг не выполнен"))
             self._add_report_row(form, "Комментарий", self._math_text(note))
             cards.append(card)
+            if record.step_size > 0.0:
+                previous_step_size = record.step_size
         return cards
 
     def _build_conjugate_iteration_cards(self, payload: RunPayload) -> list[QWidget]:
@@ -864,16 +867,30 @@ class GradientMethodsWindow(QMainWindow):
     def _translate_point(point: Point2D, direction: Point2D, scale: float) -> Point2D:
         return (point[0] + scale * direction[0], point[1] + scale * direction[1])
 
-    def _gradient_step_note(self, step_size: float, initial_step: float, result: OptimizationResult) -> str:
-        if step_size <= 0.0:
-            if result.stop_reason == "gradient_norm_reached":
-                return "Достигнута требуемая точность, переход не выполнялся."
-            return "Улучшающий шаг не найден, метод остановлен."
-        if math.isclose(step_size, initial_step, rel_tol=1e-9, abs_tol=1e-12):
-            return f"Шаг принят без изменения: h = {self._format_step(step_size)}."
-        if step_size < initial_step:
-            return f"Шаг уменьшен до h = {self._format_step(step_size)}."
-        return f"Шаг увеличен до h = {self._format_step(step_size)}."
+    def _gradient_step_note(
+        self,
+        record: IterationRecord,
+        result: OptimizationResult,
+        previous_step_size: float | None = None,
+    ) -> str:
+        decision = record.gradient_step_decision
+        if decision == "precision_reached" or (record.step_size <= 0.0 and result.stop_reason == "gradient_norm_reached"):
+            return "Достигнута требуемая точность, переход не выполнялся."
+        if decision == "no_improving_step" or record.step_size <= 0.0:
+            return "Подходящий шаг не найден, переход не выполнялся."
+        if previous_step_size is not None:
+            if math.isclose(record.step_size, previous_step_size, rel_tol=1e-9, abs_tol=1e-12):
+                return f"Шаг h = {self._format_step(record.step_size)} не изменился."
+            if record.step_size > previous_step_size:
+                return f"Шаг h = {self._format_step(record.step_size)} увеличился."
+            return f"Шаг h = {self._format_step(record.step_size)} уменьшился."
+        if decision == "accepted_as_is":
+            return f"Шаг h = {self._format_step(record.step_size)} выбран сразу и принят."
+        if decision == "accepted_after_expansion":
+            return f"Шаг h = {self._format_step(record.step_size)} получен после увеличения пробного шага и принят."
+        if decision == "accepted_after_reduction":
+            return f"Шаг h = {self._format_step(record.step_size)} получен после уменьшения пробного шага и принят."
+        return f"Шаг h = {self._format_step(record.step_size)} принят."
 
     def _conjugate_step_note(self, record: IterationRecord, result: OptimizationResult) -> str:
         if record.step_size <= 0.0:
