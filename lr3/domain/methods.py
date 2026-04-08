@@ -18,8 +18,10 @@ def finite_difference_gradient(
 ) -> Point2D:
     """Центральная разностная аппроксимация градиента."""
     x1, x2 = point
-    dx = (objective((x1 + step, x2)) - objective((x1 - step, x2))) / (2.0 * step)
-    dy = (objective((x1, x2 + step)) - objective((x1, x2 - step))) / (2.0 * step)
+    step_x1 = max(step, 1e-8 * max(1.0, abs(x1)))
+    step_x2 = max(step, 1e-8 * max(1.0, abs(x2)))
+    dx = (objective((x1 + step_x1, x2)) - objective((x1 - step_x1, x2))) / (2.0 * step_x1)
+    dy = (objective((x1, x2 + step_x2)) - objective((x1, x2 - step_x2))) / (2.0 * step_x2)
     return (dx, dy)
 
 
@@ -57,7 +59,10 @@ def _line_search(
     step = max(initial_step, min_step)
     for _ in range(max(expand_limit, 1)):
         candidate = _add(point, direction, step)
-        candidate_value = objective(candidate)
+        try:
+            candidate_value = objective(candidate)
+        except OverflowError:
+            break
         if (maximize and candidate_value > best_value) or (not maximize and candidate_value < best_value):
             best_point = candidate
             best_value = candidate_value
@@ -72,7 +77,10 @@ def _line_search(
     step = max(initial_step, min_step)
     while step >= min_step:
         candidate = _add(point, direction, step)
-        candidate_value = objective(candidate)
+        try:
+            candidate_value = objective(candidate)
+        except OverflowError:
+            break
         if (maximize and candidate_value > current_value) or (not maximize and candidate_value < current_value):
             return candidate, candidate_value, step, True
         step /= 2.0

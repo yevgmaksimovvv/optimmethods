@@ -163,3 +163,19 @@ def test_gradient_ascent_times_out_on_slow_objective() -> None:
     assert result.iterations_count == 1
     assert len(result.records) == 1
     assert math.isfinite(result.optimum_value)
+
+
+def test_gradient_ascent_does_not_fake_success_on_unbounded_maximum() -> None:
+    def objective(point: Point2D) -> float:
+        x1, x2 = point
+        return x1**2 + x2**2 - x1 * x2 + x1 - 2.0 * x2
+
+    result = gradient_ascent(
+        objective,
+        start_point=(0.0, 0.0),
+        config=_config(goal="max", max_iterations=40, timeout_seconds=1.0),
+    )
+
+    assert not result.success
+    assert result.stop_reason != "gradient_norm_reached"
+    assert result.iterations_count > 0
