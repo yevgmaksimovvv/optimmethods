@@ -118,7 +118,6 @@ METHOD_DEFAULTS = {
 DEFAULT_TIMEOUT_SECONDS = "3.0"
 DEFAULT_MIN_STEP = "1e-8"
 DEFAULT_GRADIENT_STEP = "1e-6"
-DEFAULT_MAX_STEP_EXPANSIONS = "16"
 
 
 @dataclass(frozen=True)
@@ -561,7 +560,6 @@ class GradientMethodsWindow(QMainWindow):
                 goal_raw=self._selected_goal(),
                 min_step_raw=DEFAULT_MIN_STEP,
                 gradient_step_raw=DEFAULT_GRADIENT_STEP,
-                max_step_expansions_raw=DEFAULT_MAX_STEP_EXPANSIONS,
             ),
         )
 
@@ -579,7 +577,6 @@ class GradientMethodsWindow(QMainWindow):
         goal_raw: str,
         min_step_raw: str,
         gradient_step_raw: str,
-        max_step_expansions_raw: str,
     ) -> RunPayload:
         if not expression:
             raise ValueError("Поле функции не должно быть пустым")
@@ -593,7 +590,6 @@ class GradientMethodsWindow(QMainWindow):
             goal_raw=goal_raw,
             min_step_raw=min_step_raw,
             gradient_step_raw=gradient_step_raw,
-            max_step_expansions_raw=max_step_expansions_raw,
         )
 
         if method == "gradient":
@@ -715,6 +711,7 @@ class GradientMethodsWindow(QMainWindow):
         result = payload.result
         cards: list[QWidget] = []
         direction_multiplier = -1.0 if payload.config.goal == "min" else 1.0
+        previous_step_size: float | None = None
         for record in result.records:
             has_step = record.step_size > 0.0
             step_direction = (
@@ -724,7 +721,7 @@ class GradientMethodsWindow(QMainWindow):
             )
             new_point = self._translate_point(record.point, step_direction, record.step_size) if step_direction is not None else None
             new_value = objective(new_point) if new_point is not None else None
-            note = self._gradient_step_note(record.step_size, payload.config.initial_step, result)
+            note = self._gradient_step_note(record, result, previous_step_size)
             card, form = self._create_report_card(f"Итерация {record.k + 1}", object_name="IterationCard")
             self._add_report_row(form, "Текущая точка", self._math_text(self._format_point(record.point)))
             self._add_report_row(form, "F(M<sub>k</sub>)", self._math_text(self._format_scalar(record.value)))
@@ -733,7 +730,7 @@ class GradientMethodsWindow(QMainWindow):
                 "∇F(M<sub>k</sub>)",
                 self._math_text(self._format_vector_block(record.gradient, scalar_formatter=self._format_scalar)),
             )
-            self._add_report_row(form, "h<sub>k</sub>", self._math_text(self._format_step(record.step_size)))
+            self._add_report_row(form, "Принятый шаг h<sub>k</sub>", self._math_text(self._format_step(record.step_size)))
             if new_point is not None and new_value is not None:
                 operator = "+" if payload.config.goal == "max" else "-"
                 self._add_report_row(
@@ -752,6 +749,8 @@ class GradientMethodsWindow(QMainWindow):
                 self._add_report_row(form, "Переход", self._math_text("Шаг не выполнен"))
             self._add_report_row(form, "Комментарий", self._math_text(note))
             cards.append(card)
+            if record.step_size > 0.0:
+                previous_step_size = record.step_size
         return cards
 
     def _build_conjugate_iteration_cards(self, payload: RunPayload) -> list[QWidget]:
@@ -759,36 +758,60 @@ class GradientMethodsWindow(QMainWindow):
         cards: list[QWidget] = []
         for index, record in enumerate(result.records):
             note = self._conjugate_step_note(record, result)
-            card, form = self._create_report_card(f"Итерация {index + 1}", object_name="IterationCard")
-            self._add_report_row(form, "Текущая точка", self._math_text(self._format_point(record.point)))
-            self._add_report_row(form, "F(M<sub>k</sub>)", self._math_text(self._format_scalar(record.value)))
+            cycle_index = record.cycle_index if record.cycle_index is not None else 1
+            direction_index = record.direction_index if record.direction_index is not None else index + 1
+            card, form = self._create_report_card(
+                f"Цикл {cycle_index}, шаг {direction_index}",
+                object_name="IterationCard",
+            )
+            if record.cycle_start_point is not None:
+                self._add_report_row(form, "x<sub>k</sub>", self._math_text(self._format_point(record.cycle_start_point)))
+                if record.point == record.cycle_start_point:
+                    self._add_report_row(form, "Статус цикла", self._math_text("В начале цикла y<sub>1</sub> = x<sub>k</sub>."))
+                else:
+                    self._add_report_row(form, "Статус цикла", self._math_text("Внутри цикла x<sub>k</sub> фиксирован, меняется только y<sub>j</sub>."))
+            self._add_report_row(form, "y<sub>j</sub>", self._math_text(self._format_point(record.point)))
+            self._add_report_row(form, "F(y<sub>j</sub>)", self._math_text(self._format_scalar(record.value)))
             self._add_report_row(
                 form,
-                "∇F(M<sub>k</sub>)",
+                "∇F(y<sub>j</sub>)",
                 self._math_text(self._format_vector_block(record.gradient, scalar_formatter=self._format_scalar)),
             )
             if record.direction is not None:
                 self._add_report_row(
                     form,
-                    "s<sub>k</sub>",
+                    "s<sub>j</sub>",
                     self._math_text(self._format_vector_block(record.direction, scalar_formatter=self._format_scalar)),
                 )
+                self._add_report_row(
+                    form,
+                    "Построение s<sub>j</sub>",
+                    self._math_text(self._format_conjugate_direction_formula(record)),
+                )
             if record.beta is not None:
-                self._add_report_row(form, "β<sub>k</sub>", self._math_text(self._format_scalar(record.beta)))
-            self._add_report_row(form, "λ<sub>k</sub>", self._math_text(self._format_step(record.step_size)))
+                self._add_report_row(form, "β<sub>j</sub>", self._math_text(self._format_scalar(record.beta)))
+            self._add_report_row(form, "λ<sub>j</sub>", self._math_text(self._format_step(record.step_size)))
             if record.next_point is not None and record.next_value is not None:
                 self._add_report_row(
                     form,
-                    f"M<sub>{index + 1}</sub>",
+                    "y<sub>j+1</sub>",
                     self._math_text(
-                        f"M<sub>{index + 1}</sub> = M<sub>{index}</sub> + λ<sub>{index}</sub>·s<sub>{index}</sub> = {self._format_point(record.next_point)}"
+                        f"y<sub>{direction_index + 1}</sub> = y<sub>{direction_index}</sub> + λ<sub>{direction_index}</sub>·s<sub>{direction_index}</sub> = {self._format_point(record.next_point)}"
                     ),
                 )
                 self._add_report_row(
                     form,
-                    f"F(M<sub>{index + 1}</sub>)",
+                    "F(y<sub>j+1</sub>)",
                     self._math_text(self._format_scalar(record.next_value)),
                 )
+                if record.restart_direction:
+                    self._add_report_row(
+                        form,
+                        "Переход цикла",
+                        self._math_text(
+                            f"x<sub>{cycle_index + 1}</sub> = y<sub>{direction_index + 1}</sub> = {self._format_point(record.next_point)}"
+                        ),
+                    )
             else:
                 self._add_report_row(form, "Переход", self._math_text("Шаг не выполнен"))
             self._add_report_row(form, "Комментарий", self._math_text(note))
@@ -864,16 +887,28 @@ class GradientMethodsWindow(QMainWindow):
     def _translate_point(point: Point2D, direction: Point2D, scale: float) -> Point2D:
         return (point[0] + scale * direction[0], point[1] + scale * direction[1])
 
-    def _gradient_step_note(self, step_size: float, initial_step: float, result: OptimizationResult) -> str:
-        if step_size <= 0.0:
-            if result.stop_reason == "gradient_norm_reached":
-                return "Достигнута требуемая точность, переход не выполнялся."
-            return "Улучшающий шаг не найден, метод остановлен."
-        if math.isclose(step_size, initial_step, rel_tol=1e-9, abs_tol=1e-12):
-            return f"Шаг принят без изменения: h = {self._format_step(step_size)}."
-        if step_size < initial_step:
-            return f"Шаг уменьшен до h = {self._format_step(step_size)}."
-        return f"Шаг увеличен до h = {self._format_step(step_size)}."
+    def _gradient_step_note(
+        self,
+        record: IterationRecord,
+        result: OptimizationResult,
+        previous_step_size: float | None = None,
+    ) -> str:
+        decision = record.gradient_step_decision
+        if decision == "precision_reached" or (record.step_size <= 0.0 and result.stop_reason == "gradient_norm_reached"):
+            return "Достигнута требуемая точность, переход не выполнялся."
+        if decision == "no_improving_step" or record.step_size <= 0.0:
+            return "Подходящий шаг не найден, переход не выполнялся."
+        if previous_step_size is not None:
+            if math.isclose(record.step_size, previous_step_size, rel_tol=1e-9, abs_tol=1e-12):
+                return f"Шаг h = {self._format_step(record.step_size)} не изменился."
+            if record.step_size > previous_step_size:
+                return f"Шаг h = {self._format_step(record.step_size)} увеличился."
+            return f"Шаг h = {self._format_step(record.step_size)} уменьшился."
+        if decision == "accepted_as_is":
+            return f"Шаг h = {self._format_step(record.step_size)} выбран сразу и принят."
+        if decision == "accepted_after_reduction":
+            return f"Шаг h = {self._format_step(record.step_size)} получен после уменьшения шага и принят."
+        return f"Шаг h = {self._format_step(record.step_size)} принят."
 
     def _conjugate_step_note(self, record: IterationRecord, result: OptimizationResult) -> str:
         if record.step_size <= 0.0:
@@ -882,16 +917,28 @@ class GradientMethodsWindow(QMainWindow):
             return "Улучшающий шаг не найден, метод остановлен."
         parts: list[str] = [f"Найден шаг λ = {self._format_step(record.step_size)}."]
         if record.beta is not None:
-            parts.append(f"β = {self._format_scalar(record.beta)}.")
+            parts.append(f"Направление пересчитано через β = {self._format_scalar(record.beta)}.")
         if record.restart_direction:
-            parts.append("Выполнен перезапуск направления.")
+            parts.append("Это последний шаг цикла: после него x<sub>k+1</sub> = y<sub>j+1</sub>.")
         return " ".join(parts)
+
+    def _format_conjugate_direction_formula(self, record: IterationRecord) -> str:
+        if record.direction is None:
+            return "Направление не строилось."
+        direction_text = self._format_vector_block(record.direction, scalar_formatter=self._format_scalar)
+        gradient_text = self._format_vector_block(record.gradient, scalar_formatter=self._format_scalar)
+        if record.beta is None:
+            return f"s<sub>1</sub> = ∇F(y<sub>1</sub>) = {gradient_text}."
+        return (
+            f"s<sub>j</sub> = ∇F(y<sub>j</sub>) + β<sub>j</sub>·s<sub>j-1</sub> = {direction_text}, "
+            f"где ∇F(y<sub>j</sub>) = {gradient_text}."
+        )
 
     @staticmethod
     def _format_method_title(method_name: str) -> str:
         labels = {
             "gradient_ascent": "Градиентный метод первого порядка",
-            "conjugate_gradient_ascent": "Метод сопряжённых градиентов Флетчера-Ривса",
+            "conjugate_gradient_ascent": "Метод сопряжённых градиентов",
         }
         return labels.get(method_name, method_name)
 
@@ -1156,37 +1203,54 @@ class GradientMethodsWindow(QMainWindow):
             ax_contour = figure.add_subplot(121)
             ax_convergence = figure.add_subplot(122)
 
-            xs = [item.point[0] for item in result.records]
-            ys = [item.point[1] for item in result.records]
+            xs = [item.point[0] for item in result.records if math.isfinite(item.point[0]) and math.isfinite(item.point[1])]
+            ys = [item.point[1] for item in result.records if math.isfinite(item.point[0]) and math.isfinite(item.point[1])]
             if not xs:
                 xs = [result.start_point[0], result.optimum_point[0]]
                 ys = [result.start_point[1], result.optimum_point[1]]
 
-            margin = 1.0
-            x_min = min(xs) - margin
-            x_max = max(xs) + margin
-            y_min = min(ys) - margin
-            y_max = max(ys) + margin
+            x_min, x_max, y_min, y_max = self._build_plot_window(
+                result=result,
+                analysis=analysis,
+                fallback_points=tuple(zip(xs, ys, strict=True)) if xs else (),
+            )
 
             grid_x = np.linspace(x_min, x_max, 80)
             grid_y = np.linspace(y_min, y_max, 80)
             x_mesh, y_mesh = np.meshgrid(grid_x, grid_y)
-            z_mesh = np.zeros_like(x_mesh)
+            z_mesh = np.full_like(x_mesh, np.nan, dtype=float)
 
             for i in range(x_mesh.shape[0]):
                 for j in range(x_mesh.shape[1]):
-                    z_mesh[i, j] = objective((float(x_mesh[i, j]), float(y_mesh[i, j])))
+                    try:
+                        value = objective((float(x_mesh[i, j]), float(y_mesh[i, j])))
+                    except OverflowError:
+                        continue
+                    if math.isfinite(value):
+                        z_mesh[i, j] = value
 
-            contour = ax_contour.contourf(x_mesh, y_mesh, z_mesh, levels=25, cmap="viridis")
-            figure.colorbar(contour, ax=ax_contour)
-            ax_contour.plot(xs, ys, "r.-", linewidth=2, markersize=6)
-            ax_contour.scatter([xs[0]], [ys[0]], c="white", edgecolors="black", label="start")
-            ax_contour.scatter(
-                [result.optimum_point[0]],
-                [result.optimum_point[1]],
-                c="#ff8c42" if goal == "max" else "#4fc3f7",
-                label=f"итог ({goal_label})",
-            )
+            finite_z = z_mesh[np.isfinite(z_mesh)]
+            if finite_z.size >= 2:
+                low = float(np.percentile(finite_z, 5))
+                high = float(np.percentile(finite_z, 95))
+                if math.isfinite(low) and math.isfinite(high) and high > low:
+                    contour = ax_contour.contourf(x_mesh, y_mesh, np.ma.masked_invalid(z_mesh), levels=25, cmap="viridis")
+                    figure.colorbar(contour, ax=ax_contour)
+                else:
+                    ax_contour.text(0.5, 0.5, "График недоступен для выбранного масштаба", ha="center", va="center", transform=ax_contour.transAxes)
+            else:
+                ax_contour.text(0.5, 0.5, "График недоступен для выбранного масштаба", ha="center", va="center", transform=ax_contour.transAxes)
+
+            if xs and ys:
+                ax_contour.plot(xs, ys, "r.-", linewidth=2, markersize=6)
+                ax_contour.scatter([xs[0]], [ys[0]], c="white", edgecolors="black", label="start")
+            if math.isfinite(result.optimum_point[0]) and math.isfinite(result.optimum_point[1]):
+                ax_contour.scatter(
+                    [result.optimum_point[0]],
+                    [result.optimum_point[1]],
+                    c="#ff8c42" if goal == "max" else "#4fc3f7",
+                    label=f"итог ({goal_label})",
+                )
             if analysis.stationary_points:
                 theoretical = analysis.stationary_points[0]
                 ax_contour.scatter(
@@ -1201,18 +1265,57 @@ class GradientMethodsWindow(QMainWindow):
             ax_contour.set_title(f"Траектория поиска {goal_label} на линии уровня")
             ax_contour.set_xlabel("x1")
             ax_contour.set_ylabel("x2")
+            ax_contour.set_xlim(x_min, x_max)
+            ax_contour.set_ylim(y_min, y_max)
             ax_contour.legend()
 
-            values = [record.value for record in result.records]
+            values = [record.value for record in result.records if math.isfinite(record.value)]
             if not values:
                 values = [result.optimum_value]
-            ax_convergence.plot(range(len(values)), values, "b-o", linewidth=2, markersize=4)
+            if math.isfinite(values[0]):
+                ax_convergence.plot(range(len(values)), values, "b-o", linewidth=2, markersize=4)
+            else:
+                ax_convergence.text(0.5, 0.5, "Нет конечных значений для графика сходимости", ha="center", va="center", transform=ax_convergence.transAxes)
             ax_convergence.set_title(f"Сходимость при поиске {goal_label}")
             ax_convergence.set_xlabel("k")
             ax_convergence.set_ylabel("F(x)")
             ax_convergence.grid(True, alpha=0.3)
 
             self.canvas.draw()
+
+    def _build_plot_window(
+        self,
+        *,
+        result: OptimizationResult,
+        analysis: ExtremumAnalysis,
+        fallback_points: tuple[Point2D, ...],
+    ) -> tuple[float, float, float, float]:
+        """Выбирает безопасное окно для графика без разлёта в inf/nan."""
+        if analysis.stationary_points:
+            center_x, center_y = analysis.stationary_points[0]
+            span = 6.0
+        else:
+            finite_points = [point for point in fallback_points if math.isfinite(point[0]) and math.isfinite(point[1])]
+            if finite_points:
+                center_x = sum(point[0] for point in finite_points) / len(finite_points)
+                center_y = sum(point[1] for point in finite_points) / len(finite_points)
+                span = max(
+                    max((abs(point[0] - center_x) for point in finite_points), default=1.0),
+                    max((abs(point[1] - center_y) for point in finite_points), default=1.0),
+                    3.0,
+                ) * 2.0
+            else:
+                center_x, center_y = result.start_point
+                span = 6.0
+
+        span = min(max(span, 3.0), 20.0)
+        half_span = span / 2.0
+        return (
+            center_x - half_span,
+            center_x + half_span,
+            center_y - half_span,
+            center_y + half_span,
+        )
 
     def _clear_plot(self) -> None:
         self.plot_context_label.hide()
