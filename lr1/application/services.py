@@ -12,7 +12,7 @@ import logging
 import time
 from typing import Dict
 
-from optim_core.parsing import parse_localized_float
+from optim_core.parsing import parse_localized_float, parse_localized_float_sequence
 
 from lr1.application.analysis import (
     build_plot_range,
@@ -37,10 +37,7 @@ logger = logging.getLogger("lr1.app_service")
 
 def parse_positive_series(raw: str, field_name: str) -> tuple[float, ...]:
     """Парсит список положительных чисел через запятую."""
-    parts = [item.strip() for item in raw.split(",") if item.strip()]
-    if not parts:
-        raise ValueError(f"Список {field_name} пуст.")
-    values = tuple(parse_localized_float(item, field_name) for item in parts)
+    values = parse_localized_float_sequence(raw, field_name)
     if any(item <= 0 for item in values):
         raise ValueError(f"Все значения {field_name} должны быть > 0.")
     return values

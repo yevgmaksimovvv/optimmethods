@@ -8,10 +8,15 @@ import uuid
 from dataclasses import dataclass
 from typing import Final
 
-from optim_core.parsing import parse_localized_float
+from optim_core.parsing import parse_localized_float, parse_localized_float_sequence
 
 from lr2.domain.models import (
     BatchResult,
+    BatchItemResult,
+    BatchSummary,
+    BATCH_STATUS_DOMAIN_REFUSAL,
+    BATCH_STATUS_SUCCESS,
+    BATCH_STATUS_UNEXPECTED_ERROR,
     DiscreteSolverConfig,
     Polynomial2D,
     SolverConfig,
@@ -29,10 +34,23 @@ class ServiceMetrics:
     """Базовые метрики выполнения серии запусков."""
 
     trace_id: str
-    run_count: int
+    total_count: int
     success_count: int
-    error_count: int
+    domain_refusal_count: int
+    unexpected_error_count: int
     latency_ms: float
+
+    @property
+    def run_count(self) -> int:
+        return self.success_count
+
+    @property
+    def failure_count(self) -> int:
+        return self.domain_refusal_count + self.unexpected_error_count
+
+    @property
+    def error_count(self) -> int:
+        return self.failure_count
 
 
 DEFAULT_SOLVER_CONFIG: dict[str, int | float] = {
@@ -75,10 +93,7 @@ VARIANT_PRESETS: dict[str, tuple[tuple[float, ...], ...]] = {
 
 def parse_epsilons(raw: str) -> tuple[float, ...]:
     """Парсит список epsilon через запятую."""
-    parts = [item.strip() for item in raw.split(",") if item.strip()]
-    if not parts:
-        raise ValueError("Список epsilon пуст.")
-    values = tuple(parse_localized_float(item, "epsilon") for item in parts)
+    values = parse_localized_float_sequence(raw, "epsilon")
     if any(item <= 0 for item in values):
         raise ValueError("Все epsilon должны быть > 0.")
     return values
@@ -128,7 +143,9 @@ def run_batch(
     )
 
     runs: list[SolverResult] = []
-    errors = 0
+    items: list[BatchItemResult] = []
+    domain_refusal_count = 0
+    unexpected_error_count = 0
     for epsilon in epsilons:
         config_payload = dict(DEFAULT_SOLVER_CONFIG)
         if max_iterations is not None:
@@ -160,16 +177,52 @@ def run_batch(
 
             try:
                 run = rosenbrock_minimize(objective=objective, start_point=start_point, config=config)
-            except Exception:
-                errors += 1
+            except ValueError as exc:
+                domain_refusal_count += 1
+                items.append(
+                    BatchItemResult(
+                        epsilon=epsilon,
+                        start_point=start_point,
+                        status=BATCH_STATUS_DOMAIN_REFUSAL,
+                        message=str(exc),
+                        exception_type=type(exc).__name__,
+                    )
+                )
+                logger.info(
+                    "run_batch domain refusal trace_id=%s epsilon=%s start_point=%s reason=%s",
+                    trace_id,
+                    epsilon,
+                    start_point,
+                    exc,
+                )
+                continue
+            except Exception as exc:
+                unexpected_error_count += 1
+                items.append(
+                    BatchItemResult(
+                        epsilon=epsilon,
+                        start_point=start_point,
+                        status=BATCH_STATUS_UNEXPECTED_ERROR,
+                        message=str(exc) if exc is not None else "Неизвестная ошибка",
+                        exception_type=type(exc).__name__ if exc is not None else "Exception",
+                    )
+                )
                 logger.exception(
-                    "run_batch failed trace_id=%s epsilon=%s start_point=%s",
+                    "run_batch unexpected error trace_id=%s epsilon=%s start_point=%s",
                     trace_id,
                     epsilon,
                     start_point,
                 )
                 continue
             runs.append(run)
+            items.append(
+                BatchItemResult(
+                    epsilon=epsilon,
+                    start_point=start_point,
+                    status=BATCH_STATUS_SUCCESS,
+                    run=run,
+                )
+            )
             logger.info(
                 "run_batch item trace_id=%s epsilon=%s start=%s success=%s iterations=%s optimum=%s value=%.8f",
                 trace_id,
@@ -184,20 +237,32 @@ def run_batch(
     latency_ms = (time.perf_counter() - started) * 1000.0
     metrics = ServiceMetrics(
         trace_id=trace_id,
-        run_count=len(runs),
+        total_count=len(items),
         success_count=sum(1 for item in runs if item.success),
-        error_count=errors,
+        domain_refusal_count=domain_refusal_count,
+        unexpected_error_count=unexpected_error_count,
         latency_ms=latency_ms,
     )
     logger.info(
-        "run_batch done trace_id=%s run_count=%d success_count=%d error_count=%d latency_ms=%.2f",
+        "run_batch done trace_id=%s total_count=%d success_count=%d domain_refusal_count=%d unexpected_error_count=%d latency_ms=%.2f",
         metrics.trace_id,
-        metrics.run_count,
+        metrics.total_count,
         metrics.success_count,
-        metrics.error_count,
+        metrics.domain_refusal_count,
+        metrics.unexpected_error_count,
         metrics.latency_ms,
     )
-    return BatchResult(polynomial=polynomial, runs=tuple(runs)), metrics
+    return BatchResult(
+        polynomial=polynomial,
+        runs=tuple(runs),
+        items=tuple(items),
+        summary=BatchSummary(
+            total_count=len(items),
+            success_count=len(runs),
+            domain_refusal_count=domain_refusal_count,
+            unexpected_error_count=unexpected_error_count,
+        ),
+    ), metrics
 
 
 def run_discrete_batch(
@@ -222,7 +287,9 @@ def run_discrete_batch(
     )
 
     runs: list[SolverResult] = []
-    errors = 0
+    items: list[BatchItemResult] = []
+    domain_refusal_count = 0
+    unexpected_error_count = 0
     for epsilon in epsilons:
         config_payload = dict(DEFAULT_DISCRETE_SOLVER_CONFIG)
         if max_iterations is not None:
@@ -261,16 +328,52 @@ def run_discrete_batch(
                     start_point=start_point,
                     config=config,
                 )
-            except Exception:
-                errors += 1
+            except ValueError as exc:
+                domain_refusal_count += 1
+                items.append(
+                    BatchItemResult(
+                        epsilon=epsilon,
+                        start_point=start_point,
+                        status=BATCH_STATUS_DOMAIN_REFUSAL,
+                        message=str(exc),
+                        exception_type=type(exc).__name__,
+                    )
+                )
+                logger.info(
+                    "run_discrete_batch domain refusal trace_id=%s epsilon=%s start_point=%s reason=%s",
+                    trace_id,
+                    epsilon,
+                    start_point,
+                    exc,
+                )
+                continue
+            except Exception as exc:
+                unexpected_error_count += 1
+                items.append(
+                    BatchItemResult(
+                        epsilon=epsilon,
+                        start_point=start_point,
+                        status=BATCH_STATUS_UNEXPECTED_ERROR,
+                        message=str(exc) if exc is not None else "Неизвестная ошибка",
+                        exception_type=type(exc).__name__ if exc is not None else "Exception",
+                    )
+                )
                 logger.exception(
-                    "run_discrete_batch failed trace_id=%s epsilon=%s start_point=%s",
+                    "run_discrete_batch unexpected error trace_id=%s epsilon=%s start_point=%s",
                     trace_id,
                     epsilon,
                     start_point,
                 )
                 continue
             runs.append(run)
+            items.append(
+                BatchItemResult(
+                    epsilon=epsilon,
+                    start_point=start_point,
+                    status=BATCH_STATUS_SUCCESS,
+                    run=run,
+                )
+            )
             logger.info(
                 (
                     "run_discrete_batch item trace_id=%s epsilon=%s start=%s "
@@ -288,20 +391,32 @@ def run_discrete_batch(
     latency_ms = (time.perf_counter() - started) * 1000.0
     metrics = ServiceMetrics(
         trace_id=trace_id,
-        run_count=len(runs),
+        total_count=len(items),
         success_count=sum(1 for item in runs if item.success),
-        error_count=errors,
+        domain_refusal_count=domain_refusal_count,
+        unexpected_error_count=unexpected_error_count,
         latency_ms=latency_ms,
     )
     logger.info(
-        "run_discrete_batch done trace_id=%s run_count=%d success_count=%d error_count=%d latency_ms=%.2f",
+        "run_discrete_batch done trace_id=%s total_count=%d success_count=%d domain_refusal_count=%d unexpected_error_count=%d latency_ms=%.2f",
         metrics.trace_id,
-        metrics.run_count,
+        metrics.total_count,
         metrics.success_count,
-        metrics.error_count,
+        metrics.domain_refusal_count,
+        metrics.unexpected_error_count,
         metrics.latency_ms,
     )
-    return BatchResult(polynomial=polynomial, runs=tuple(runs)), metrics
+    return BatchResult(
+        polynomial=polynomial,
+        runs=tuple(runs),
+        items=tuple(items),
+        summary=BatchSummary(
+            total_count=len(items),
+            success_count=len(runs),
+            domain_refusal_count=domain_refusal_count,
+            unexpected_error_count=unexpected_error_count,
+        ),
+    ), metrics
 
 
 def polynomial_value(polynomial: Polynomial2D, vector: tuple[float, ...]) -> float:

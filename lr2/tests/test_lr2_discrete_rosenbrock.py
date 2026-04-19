@@ -67,7 +67,14 @@ def test_run_discrete_batch_wraps_single_run() -> None:
         start_points=((4.0, -3.0),),
     )
 
+    assert metrics.total_count == 1
     assert metrics.run_count == 1
-    assert metrics.error_count == 0
+    assert metrics.failure_count == 0
+    assert metrics.domain_refusal_count == 0
+    assert metrics.unexpected_error_count == 0
     assert batch_result.runs
     assert batch_result.runs[0].success
+    assert batch_result.summary.total_count == 1
+    assert batch_result.summary.success_count == 1
+    assert batch_result.summary.domain_refusal_count == 0
+    assert batch_result.summary.unexpected_error_count == 0

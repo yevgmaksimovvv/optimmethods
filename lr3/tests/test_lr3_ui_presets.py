@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import os
-
-from PySide6.QtWidgets import QApplication, QLabel
+from PySide6.QtWidgets import QLabel
 
 from lr3.application.services import build_config, run_conjugate, run_gradient
 from lr3.domain.expression import analyze_local_extremum, compile_objective
@@ -12,20 +10,12 @@ from lr3.domain.models import IterationRecord, OptimizationResult
 from lr3.ui.window import GradientMethodsWindow, RunPayload
 
 
-def _app() -> QApplication:
-    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-    app = QApplication.instance()
-    if app is None:
-        app = QApplication([])
-    return app
-
-
 def _coefficients(window: GradientMethodsWindow) -> tuple[str, ...]:
     return tuple(window.coefficient_table.item(row, 1).text() for row in range(window.coefficient_table.rowCount()))
 
 
-def test_lr3_presets_fill_coefficients_and_custom_is_editable() -> None:
-    _app()
+def test_lr3_presets_fill_coefficients_and_custom_is_editable(qapp_offscreen) -> None:
+    _ = qapp_offscreen
     window = GradientMethodsWindow()
 
     assert set(window.preset_buttons) == {"gradient", "conjugate", "custom"}
@@ -57,8 +47,8 @@ def test_lr3_presets_fill_coefficients_and_custom_is_editable() -> None:
     assert window.results_empty_stack.currentIndex() == 0
 
 
-def test_lr3_method_buttons_update_numeric_defaults() -> None:
-    _app()
+def test_lr3_method_buttons_update_numeric_defaults(qapp_offscreen) -> None:
+    _ = qapp_offscreen
     window = GradientMethodsWindow()
 
     window.method_buttons["conjugate"].click()
@@ -73,8 +63,8 @@ def test_lr3_method_buttons_update_numeric_defaults() -> None:
     assert not hasattr(window, "gradient_step_input")
 
 
-def test_lr3_analysis_card_renders_symbolic_hessian() -> None:
-    _app()
+def test_lr3_analysis_card_renders_symbolic_hessian(qapp_offscreen) -> None:
+    _ = qapp_offscreen
     window = GradientMethodsWindow()
     analysis = analyze_local_extremum("x1**2 + x2**2 - x1*x2 + x1 - 2*x2", (0.0, 0.0), goal="min")
 
@@ -96,8 +86,8 @@ def test_lr3_analysis_card_renders_symbolic_hessian() -> None:
     assert any("Согласование" in text for text in texts)
 
 
-def test_lr3_plot_render_handles_unbounded_maximum_without_crashing() -> None:
-    _app()
+def test_lr3_plot_render_handles_unbounded_maximum_without_crashing(qapp_offscreen) -> None:
+    _ = qapp_offscreen
     window = GradientMethodsWindow()
     config = build_config(
         epsilon_raw="1e-6",
@@ -124,8 +114,8 @@ def test_lr3_plot_render_handles_unbounded_maximum_without_crashing() -> None:
     assert window.canvas.figure.axes
 
 
-def test_lr3_gradient_step_comment_names_the_accepted_step() -> None:
-    _app()
+def test_lr3_gradient_step_comment_names_the_accepted_step(qapp_offscreen) -> None:
+    _ = qapp_offscreen
     window = GradientMethodsWindow()
     result = OptimizationResult(
         method_name="gradient_ascent",
@@ -183,8 +173,8 @@ def test_lr3_gradient_step_comment_names_the_accepted_step() -> None:
     assert note_stop == "Достигнута требуемая точность, переход не выполнялся."
 
 
-def test_lr3_gradient_iteration_card_marks_h_as_accepted_step() -> None:
-    _app()
+def test_lr3_gradient_iteration_card_marks_h_as_accepted_step(qapp_offscreen) -> None:
+    _ = qapp_offscreen
     window = GradientMethodsWindow()
     config = build_config(
         epsilon_raw="1e-5",
@@ -214,8 +204,8 @@ def test_lr3_gradient_iteration_card_marks_h_as_accepted_step() -> None:
     assert any(("выбран сразу и принят" in text) or ("получен после уменьшения шага и принят" in text) for text in texts)
 
 
-def test_lr3_conjugate_iteration_cards_explain_cycle_transition_and_direction_update() -> None:
-    _app()
+def test_lr3_conjugate_iteration_cards_explain_cycle_transition_and_direction_update(qapp_offscreen) -> None:
+    _ = qapp_offscreen
     window = GradientMethodsWindow()
     config = build_config(
         epsilon_raw="1e-6",

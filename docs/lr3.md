@@ -8,7 +8,7 @@
 
 - градиентный метод первого порядка с выбором `min/max`;
 - метод сопряженных градиентов (Fletcher-Reeves) с выбором `min/max`;
-- безопасный парсинг выражения `F(x1, x2)` с whitelist-операциями и без небезопасного `eval`;
+- безопасный парсинг выражения `F(x1, x2)` с белым списком операций и без небезопасного `eval`;
 - явный выбор цели `min/max` в UI и в конфиге запуска;
 - журнал итераций с причиной остановки;
 - общий аналитический блок: градиент, стационарная точка, матрица Гессе и вывод о характере экстремума;
@@ -28,7 +28,7 @@
 
 - Python `3.10+`.
 - `pip`.
-- зависимости из общего [`requirements.txt`](../requirements.txt).
+- основной путь установки: `python3 -m pip install -e .[test]`; [`requirements.txt`](../requirements.txt) остаётся зеркалом runtime-зависимостей для bootstrap-подсказок.
 
 ## Установка
 
@@ -36,7 +36,7 @@
 cd optimmethods
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install -r requirements.txt
+python3 -m pip install -e .[test]
 ```
 
 ## Запуск
@@ -44,7 +44,7 @@ python -m pip install -r requirements.txt
 ```bash
 cd optimmethods
 source .venv/bin/activate
-python -m lr3
+python3 -m lr3
 ```
 
 ## Использование
@@ -62,15 +62,8 @@ python -m lr3
 - по достижении `timeout_seconds` выполнение завершается с причиной `timeout`;
 - пороги и лимиты задаются через `MethodConfig`.
 
-## Migration note (breaking change)
-
-- UI ЛР3 переведен с `Tkinter` на `PySide6` для унификации с ЛР1/ЛР2 и shell;
-- ЛР3 теперь поддерживает embedded-режим в общем приложении лабораторных;
-- отдельный запуск `python -m lr3` сохранен.
-
 ## Проверки
 
 ```bash
-tox -c lr3/tox.ini -e test
-tox -c lr3/tox.ini -e lint
+python -m pytest -q lr3/tests
 ```

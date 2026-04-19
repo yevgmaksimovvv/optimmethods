@@ -10,7 +10,6 @@
 - `optim_core/` — общие контракты и утилиты, переиспользуемые между лабораторными.
 - `docs/` — документация по лабораторным работам.
 - `tasks/` — постановки и изображения заданий.
-- `theory/` — теоретические материалы.
 - `Отчет/` — отчётные документы.
 
 ## Документация по лабораторным
@@ -18,13 +17,22 @@
 - [ЛР1](docs/lr1.md)
 - [ЛР2](docs/lr2.md)
 - [ЛР3](docs/lr3.md)
-- [Архитектурный контракт](docs/architecture.md)
 
 ## Режимы запуска
 
 - Отдельные лабораторные:
-  - `python -m lr1`
-  - `python -m lr2`
-  - `python -m lr3`
-- Единый plugin-shell:
-  - `python -m optim_core.labs`
+  - `python3 -m lr1`
+  - `python3 -m lr2`
+  - `python3 -m lr3`
+- Единый статический shell:
+  - `python3 -m optim_core.labs`
+
+## Установка и проверка
+
+```bash
+cd optimmethods
+python3 -m venv .venv
+source .venv/bin/activate
+python3 -m pip install -e .[test]
+python3 -m pytest -q
+```

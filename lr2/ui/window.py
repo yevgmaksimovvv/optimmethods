@@ -2,15 +2,10 @@
 
 from __future__ import annotations
 
-import csv
 import math
 import sys
-from datetime import datetime
-from pathlib import Path
 
 import numpy as np
-from matplotlib.figure import Figure
-from mpl_toolkits.mplot3d import Axes3D as _Axes3D  # noqa: F401  # регистрация 3d-проекции
 from optim_core.parsing import parse_localized_float
 from optim_core.ui import (
     BatchRunUiController,
@@ -59,6 +54,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from lr2.application.artifacts import RosenbrockArtifactsStore
 from lr2.application.services import (
     VARIANT_PRESETS,
     build_polynomial,
@@ -67,8 +63,15 @@ from lr2.application.services import (
     run_batch,
     run_discrete_batch,
 )
-from lr2.domain.models import BatchResult, SolverResult
-from lr2.domain.polynomial import evaluate_polynomial, format_polynomial
+from lr2.domain.models import (
+    BATCH_STATUS_DOMAIN_REFUSAL,
+    BATCH_STATUS_SUCCESS,
+    BATCH_STATUS_UNEXPECTED_ERROR,
+    BatchItemResult,
+    BatchResult,
+    SolverResult,
+)
+from lr2.domain.polynomial import evaluate_polynomial
 
 APP_TITLE = "ЛР2 — Метод Розенброка"
 COEFFICIENT_MAX_DEGREE = 4
@@ -77,7 +80,6 @@ EPSILON_INPUT_WIDTH = 96
 START_INPUT_WIDTH = 64
 CONTROL_BUTTON_SIZE = 36
 ROW_CONTROL_SPACING = 2
-ARTIFACTS_BASE_DIR = Path("report") / "lr2_runs"
 PRESET_CONFIGS = {
     "variant_f1": {
         "label": "F1",
@@ -226,6 +228,7 @@ class RosenbrockWindow(QMainWindow):
         self._active_preset_key = "variant_f1"
         self._solver_mode = "continuous"
         self._plot_mode: str = "contour"
+        self._artifacts_store = RosenbrockArtifactsStore()
         self.results_tabs: QTabWidget | None = None
         self.results_tab_indexes = None
         self._epsilon_row: DynamicSeriesInputRow | None = None
@@ -534,18 +537,24 @@ class RosenbrockWindow(QMainWindow):
 
         summary_group = QGroupBox("Результаты расчёта")
         summary_layout = QVBoxLayout(summary_group)
-        self.summary_table = QTableWidget(0, 7)
+        self.batch_summary_label = QLabel("Пока нет результатов.")
+        self.batch_summary_label.setObjectName("SectionHint")
+        self.batch_summary_label.setWordWrap(True)
+        summary_layout.addWidget(self.batch_summary_label)
+        self.summary_table = QTableWidget(0, 8)
         self.summary_table.setHorizontalHeaderLabels(
-            ["№", "ε", "Старт", "x*", "f(x*)", "Итераций", "Причина завершения"]
+            ["№", "ε", "Старт", "x*", "f(x*)", "Итераций", "Статус", "Сообщение"]
         )
         summary_header = MathHeaderView(Qt.Horizontal, self.summary_table)
         self.summary_table.setHorizontalHeader(summary_header)
-        summary_header.set_math_labels(["№", "&epsilon;", "Старт", "x*", "f(x*)", "Итераций", "Причина"])
+        summary_header.set_math_labels(
+            ["№", "&epsilon;", "Старт", "x*", "f(x*)", "Итераций", "Статус", "Сообщение"]
+        )
         self.summary_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.summary_table.horizontalHeader().setDefaultAlignment(Qt.AlignCenter)
         self.summary_table.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.summary_table.setTextElideMode(Qt.ElideNone)
-        self._set_summary_table_empty_layout()
+        set_table_empty_layout(self.summary_table)
         self.summary_table.setMinimumHeight(140)
         self.summary_table.verticalHeader().setVisible(False)
         self.summary_table.itemSelectionChanged.connect(self._on_summary_selection_changed)
@@ -571,7 +580,7 @@ class RosenbrockWindow(QMainWindow):
         self.steps_table.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.steps_table.horizontalHeader().setDefaultAlignment(Qt.AlignCenter)
         self.steps_table.setTextElideMode(Qt.ElideNone)
-        self._set_steps_table_empty_layout()
+        set_table_empty_layout(self.steps_table)
         self.steps_table.setMinimumHeight(190)
         self.steps_table.verticalHeader().setVisible(False)
         configure_data_table(
@@ -739,7 +748,7 @@ class RosenbrockWindow(QMainWindow):
         self._run_flow.apply(batch_result)
         if hasattr(metrics, "trace_id"):
             try:
-                self._save_artifacts(batch_result, trace_id=metrics.trace_id)
+                self._artifacts_store.save_batch_result(batch_result, trace_id=metrics.trace_id)
             except Exception as exc:
                 QMessageBox.warning(self, "Сохранение артефактов", f"Не удалось сохранить артефакты: {exc}")
         self._set_busy(False)
@@ -755,10 +764,19 @@ class RosenbrockWindow(QMainWindow):
         self._selected_run_index = None
 
     def _render_batch_overview(self, batch_result: BatchResult) -> None:
+        summary = batch_result.summary
+        self.batch_summary_label.setText(
+            "Комбинаций: "
+            f"{summary.total_count}, "
+            f"успехов: {summary.success_count}, "
+            f"доменный отказ: {summary.domain_refusal_count}, "
+            f"неожиданных ошибок: {summary.unexpected_error_count}"
+        )
         self._fill_summary_table(batch_result)
 
     def _select_first_run_after_apply(self, batch_result: BatchResult) -> bool:
-        if not batch_result.runs:
+        batch_items = self._batch_items(batch_result)
+        if not batch_items:
             return False
         self._select_run(0, sync_table_selection=True)
         return True
@@ -766,62 +784,88 @@ class RosenbrockWindow(QMainWindow):
     def _clear_batch_details(self) -> None:
         self._set_results_tab_empty_state(True)
         self.steps_table.setRowCount(0)
-        self._set_steps_table_empty_layout()
+        set_table_empty_layout(self.steps_table)
         self._clear_plot()
 
     def _select_run(self, run_index: int, sync_table_selection: bool) -> None:
         """Выбирает прогон и синхронно обновляет итерации и график."""
         if self._batch_result is None:
             return
-        if run_index < 0 or run_index >= len(self._batch_result.runs):
+        batch_items = self._batch_items(self._batch_result)
+        if run_index < 0 or run_index >= len(batch_items):
             return
 
         self._selected_run_index = run_index
-        run = self._batch_result.runs[run_index]
+        item = batch_items[run_index]
         if sync_table_selection:
             self.summary_table.blockSignals(True)
             try:
                 self.summary_table.selectRow(run_index)
             finally:
                 self.summary_table.blockSignals(False)
-        self._show_run_details(run)
+        self._show_run_details(item)
 
-    def _show_run_details(self, run: SolverResult) -> None:
+    def _show_run_details(self, item: BatchItemResult) -> None:
+        if item.run is None:
+            self.steps_table.setRowCount(0)
+            set_table_empty_layout(self.steps_table)
+            self.steps_state_label.setText(
+                item.message or "У выбранной комбинации нет результата расчёта."
+            )
+            self.steps_state_label.show()
+            self._clear_plot(message=item.message or "У выбранной комбинации нет результата расчёта.")
+            return
+
+        run = item.run
         if run.steps:
             self.steps_state_label.hide()
             self._fill_steps_table(run)
         else:
             self.steps_table.setRowCount(0)
-            self._set_steps_table_empty_layout()
+            set_table_empty_layout(self.steps_table)
             self.steps_state_label.setText("У выбранного запуска нет сохранённой истории итераций.")
             self.steps_state_label.show()
         self._draw_run_plot(self._batch_result, run)
 
     def _fill_summary_table(self, batch_result: BatchResult) -> None:
-        self.summary_table.setRowCount(len(batch_result.runs))
-        for index, run in enumerate(batch_result.runs):
-            row = [
-                str(index + 1),
-                f"{run.epsilon:.6g}",
-                self._format_point(run.start_point),
-                self._format_point(run.optimum_point),
-                f"{run.optimum_value:.8g}",
-                str(run.iterations_count),
-                run.stop_reason,
-            ]
+        batch_items = self._batch_items(batch_result)
+        self.summary_table.setRowCount(len(batch_items))
+        for index, item in enumerate(batch_items):
+            run = item.run
+            if run is None:
+                row = [
+                    str(index + 1),
+                    f"{item.epsilon:.6g}",
+                    self._format_point(item.start_point),
+                    "",
+                    "",
+                    "",
+                    self._format_batch_status(item),
+                    item.message or "",
+                ]
+            else:
+                row = [
+                    str(index + 1),
+                    f"{run.epsilon:.6g}",
+                    self._format_point(run.start_point),
+                    self._format_point(run.optimum_point),
+                    f"{run.optimum_value:.8g}",
+                    str(run.iterations_count),
+                    self._format_batch_status(item),
+                    run.stop_reason,
+                ]
             for col, value in enumerate(row):
-                item = QTableWidgetItem(value)
-                item.setTextAlignment(Qt.AlignCenter)
+                table_item = QTableWidgetItem(value)
+                table_item.setTextAlignment(Qt.AlignCenter)
                 if col == 6:
-                    if run.success:
-                        item.setForeground(Qt.GlobalColor.green)
-                self.summary_table.setItem(index, col, item)
-        if batch_result.runs:
+                    self._style_status_item(table_item, item)
+                self.summary_table.setItem(index, col, table_item)
+        if batch_items:
             self._set_results_tab_empty_state(False)
-            self._set_summary_table_data_layout()
+            set_table_data_layout(self.summary_table, [48, 76, 140, 140, 110, 58, 148, 320])
         else:
             self._set_results_tab_empty_state(True)
-            self._set_summary_table_empty_layout()
+            set_table_empty_layout(self.summary_table)
 
     def _collect_epsilons_raw(self) -> str:
         if self._epsilon_row is None:
@@ -925,9 +969,15 @@ class RosenbrockWindow(QMainWindow):
     def _on_results_tab_changed(self, index: int) -> None:
         if self._batch_result is None or self._selected_run_index is None or self.results_tab_indexes is None:
             return
+        batch_items = self._batch_items(self._batch_result)
+        if self._selected_run_index < 0 or self._selected_run_index >= len(batch_items):
+            return
         if index == self.results_tab_indexes.plot:
-            run = self._batch_result.runs[self._selected_run_index]
-            self._draw_run_plot(self._batch_result, run)
+            item = batch_items[self._selected_run_index]
+            if item.run is None:
+                self._clear_plot(message=item.message or "У выбранной комбинации нет результата расчёта.")
+            else:
+                self._draw_run_plot(self._batch_result, item.run)
         elif index == self.results_tab_indexes.results:
             self._select_run(self._selected_run_index, sync_table_selection=True)
 
@@ -939,11 +989,15 @@ class RosenbrockWindow(QMainWindow):
         if not self._batch_result or self._selected_run_index is None:
             self._clear_plot()
             return
-        if self._selected_run_index < 0 or self._selected_run_index >= len(self._batch_result.runs):
+        batch_items = self._batch_items(self._batch_result)
+        if self._selected_run_index < 0 or self._selected_run_index >= len(batch_items):
             self._clear_plot()
             return
-        run = self._batch_result.runs[self._selected_run_index]
-        self._draw_run_plot(self._batch_result, run)
+        item = batch_items[self._selected_run_index]
+        if item.run is None:
+            self._clear_plot(message=item.message or "У выбранной комбинации нет результата расчёта.")
+            return
+        self._draw_run_plot(self._batch_result, item.run)
 
     def _sync_plot_mode_button_styles(self) -> None:
         for mode_key, button in self.plot_mode_buttons.items():
@@ -956,22 +1010,6 @@ class RosenbrockWindow(QMainWindow):
         if self.results_tab_stack is None:
             return
         self.results_tab_stack.set_empty(is_empty)
-
-    def _set_summary_table_empty_layout(self) -> None:
-        """Пустая таблица итогов должна занимать ширину равномерно."""
-        set_table_empty_layout(self.summary_table)
-
-    def _set_summary_table_data_layout(self) -> None:
-        """Для данных: ширина по содержимому + горизонтальный скролл."""
-        set_table_data_layout(self.summary_table, [48, 76, 140, 140, 110, 58, 220])
-
-    def _set_steps_table_empty_layout(self) -> None:
-        """Для пустого состояния убираем визуальный «обрубок» справа."""
-        set_table_empty_layout(self.steps_table)
-
-    def _set_steps_table_data_layout(self) -> None:
-        """Для данных: ширина по содержимому + горизонтальный скролл."""
-        set_table_data_layout(self.steps_table, [52, 112, 92, 44, 112, 112, 92, 92, 120, 110])
 
     def _fill_steps_table(self, run: SolverResult) -> None:
         self.steps_table.setRowCount(len(run.steps))
@@ -992,8 +1030,41 @@ class RosenbrockWindow(QMainWindow):
                 item = QTableWidgetItem(value)
                 item.setTextAlignment(Qt.AlignCenter)
                 self.steps_table.setItem(row_idx, col_idx, item)
-        self._set_steps_table_data_layout()
+        set_table_data_layout(self.steps_table, [52, 112, 92, 44, 112, 112, 92, 92, 120, 110])
         self.steps_state_label.hide()
+
+    def _batch_items(self, batch_result: BatchResult) -> tuple[BatchItemResult, ...]:
+        if batch_result.items:
+            return batch_result.items
+        return tuple(
+            BatchItemResult(
+                epsilon=run.epsilon,
+                start_point=run.start_point,
+                status=BATCH_STATUS_SUCCESS,
+                run=run,
+            )
+            for run in batch_result.runs
+        )
+
+    @staticmethod
+    def _format_batch_status(item: BatchItemResult) -> str:
+        if item.status == BATCH_STATUS_SUCCESS:
+            return "OK"
+        if item.status == BATCH_STATUS_DOMAIN_REFUSAL:
+            return "Доменный отказ"
+        if item.status == BATCH_STATUS_UNEXPECTED_ERROR:
+            return "Ошибка"
+        return item.status
+
+    @staticmethod
+    def _style_status_item(table_item: QTableWidgetItem, batch_item: BatchItemResult) -> None:
+        if batch_item.status == BATCH_STATUS_SUCCESS:
+            color = Qt.GlobalColor.green if batch_item.run is None or batch_item.run.success else Qt.GlobalColor.yellow
+            table_item.setForeground(color)
+        elif batch_item.status == BATCH_STATUS_DOMAIN_REFUSAL:
+            table_item.setForeground(Qt.GlobalColor.darkYellow)
+        elif batch_item.status == BATCH_STATUS_UNEXPECTED_ERROR:
+            table_item.setForeground(Qt.GlobalColor.red)
 
     def _draw_run_plot(self, batch_result: BatchResult, run: SolverResult) -> None:
         points = np.array(run.trajectory)
@@ -1016,7 +1087,7 @@ class RosenbrockWindow(QMainWindow):
         grid_x = np.linspace(x_min - margin_x, x_max + margin_x, 120)
         grid_y = np.linspace(y_min - margin_y, y_max + margin_y, 120)
         mesh_x, mesh_y = np.meshgrid(grid_x, grid_y)
-        mesh_z = self._evaluate_mesh(batch_result, mesh_x, mesh_y)
+        mesh_z = self._artifacts_store.build_mesh(batch_result, mesh_x, mesh_y)
 
         with dark_plot_context():
             self.canvas.figure.clear()
@@ -1093,173 +1164,6 @@ class RosenbrockWindow(QMainWindow):
                     text.set_color("#e8f0ff")
 
         self.canvas.draw()
-
-    def _save_artifacts(self, batch_result: BatchResult, trace_id: str) -> Path:
-        run_dir = self._create_artifacts_dir(trace_id)
-        formula_text = format_polynomial(batch_result.polynomial)
-        self._write_summary_csv(run_dir / "summary.csv", batch_result)
-        (run_dir / "formula.txt").write_text(f"Формула: {formula_text}\n", encoding="utf-8")
-
-        for run_index, run in enumerate(batch_result.runs, start=1):
-            single_dir = run_dir / f"run_{run_index:03d}"
-            single_dir.mkdir(parents=True, exist_ok=True)
-            self._write_iterations_csv(single_dir / "iterations.csv", run)
-            self._save_run_plot_png(batch_result, run, mode="contour", output_path=single_dir / "contour.png")
-            self._save_run_plot_png(batch_result, run, mode="surface", output_path=single_dir / "surface.png")
-
-        return run_dir
-
-    def _create_artifacts_dir(self, trace_id: str) -> Path:
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        base_name = f"{timestamp}_{trace_id}"
-        ARTIFACTS_BASE_DIR.mkdir(parents=True, exist_ok=True)
-        candidate = ARTIFACTS_BASE_DIR / base_name
-        suffix = 1
-        while candidate.exists():
-            candidate = ARTIFACTS_BASE_DIR / f"{base_name}_{suffix:02d}"
-            suffix += 1
-        candidate.mkdir(parents=True, exist_ok=False)
-        return candidate
-
-    def _write_summary_csv(self, path: Path, batch_result: BatchResult) -> None:
-        with path.open("w", encoding="utf-8-sig", newline="") as csvfile:
-            writer = csv.writer(csvfile, delimiter=",")
-            writer.writerow(["#", "epsilon", "start", "x*", "f(x*)", "N", "status"])
-            for index, run in enumerate(batch_result.runs, start=1):
-                writer.writerow(
-                    [
-                        index,
-                        f"{run.epsilon:.6g}",
-                        self._format_point(run.start_point),
-                        self._format_point(run.optimum_point),
-                        f"{run.optimum_value:.8g}",
-                        run.iterations_count,
-                        "OK" if run.success else "MAX_ITER",
-                    ]
-                )
-
-    def _write_iterations_csv(self, path: Path, run: SolverResult) -> None:
-        with path.open("w", encoding="utf-8-sig", newline="") as csvfile:
-            writer = csv.writer(csvfile, delimiter=",")
-            writer.writerow(["K", "x_k", "F(x_k)", "j", "d_j", "y_j", "f(y_j)", "λ_j", "y_{j+1}", "f(y_{j+1})"])
-            for step in run.steps:
-                writer.writerow(
-                    [
-                        step.k,
-                        self._format_point(step.x_k),
-                        f"{step.f_x_k:.8g}",
-                        step.j,
-                        self._format_point(step.direction),
-                        self._format_point(step.y_j),
-                        f"{step.f_y_j:.8g}",
-                        f"{step.lambda_j:.8g}",
-                        self._format_point(step.y_next),
-                        f"{step.f_y_next:.8g}",
-                    ]
-                )
-
-    def _save_run_plot_png(self, batch_result: BatchResult, run: SolverResult, mode: str, output_path: Path) -> None:
-        points = np.array(run.trajectory)
-        if points.ndim != 2 or points.shape[1] != 2:
-            return
-
-        x_vals = points[:, 0]
-        y_vals = points[:, 1]
-        x_min = float(np.min(x_vals))
-        x_max = float(np.max(x_vals))
-        y_min = float(np.min(y_vals))
-        y_max = float(np.max(y_vals))
-        span_x = max(x_max - x_min, 1.0)
-        span_y = max(y_max - y_min, 1.0)
-        margin_x = span_x * 0.6
-        margin_y = span_y * 0.6
-
-        grid_x = np.linspace(x_min - margin_x, x_max + margin_x, 120)
-        grid_y = np.linspace(y_min - margin_y, y_max + margin_y, 120)
-        mesh_x, mesh_y = np.meshgrid(grid_x, grid_y)
-        mesh_z = self._evaluate_mesh(batch_result, mesh_x, mesh_y)
-
-        with dark_plot_context():
-            figure = Figure(figsize=(9.0, 6.0), dpi=120)
-            try:
-                figure.patch.set_facecolor("#171b24")
-                if mode == "surface":
-                    ax_surface = figure.add_subplot(1, 1, 1, projection="3d")
-                    if hasattr(ax_surface, "set_proj_type"):
-                        ax_surface.set_proj_type("ortho")
-                    z_clipped = self._build_surface_mesh(mesh_z)
-                    ax_surface.plot_surface(
-                        mesh_x,
-                        mesh_y,
-                        z_clipped,
-                        cmap="turbo",
-                        alpha=0.68,
-                        linewidth=0,
-                        antialiased=True,
-                    )
-                    path_z = [evaluate_polynomial(batch_result.polynomial, point[0], point[1]) for point in run.trajectory]
-                    z_span = max(float(np.nanmax(z_clipped) - np.nanmin(z_clipped)), 1.0)
-                    lifted_path_z = [value + z_span * 0.08 for value in path_z]
-                    _draw_surface_trajectory(ax_surface, x_vals, y_vals, lifted_path_z)
-                    ax_surface.set_title("Поверхность и траектория")
-                    ax_surface.set_xlabel("x1")
-                    ax_surface.set_ylabel("x2")
-                    ax_surface.set_zlabel("f(x1, x2)")
-                    ax_surface.grid(False)
-                    spans = _report_surface_aspect(x_max - x_min, y_max - y_min, z_span)
-                    if hasattr(ax_surface, "set_box_aspect"):
-                        ax_surface.set_box_aspect(spans)
-                    for axis in (ax_surface.xaxis, ax_surface.yaxis, ax_surface.zaxis):
-                        pane = getattr(axis, "pane", None)
-                        if pane is not None:
-                            pane.set_facecolor((0.12, 0.16, 0.23, 0.45))
-                    ax_surface.tick_params(colors="#c4cfdf")
-                    surface_top = float(np.nanmax(z_clipped))
-                    z_span = max(float(np.nanmax(z_clipped) - np.nanmin(z_clipped)), 1.0)
-                    ax_surface.set_zlim(float(np.nanmin(z_clipped)), float(surface_top + z_span * 0.2))
-                    elev, azim = _surface_view_angles(points)
-                    ax_surface.view_init(elev=elev, azim=azim)
-                else:
-                    ax_contour = figure.add_subplot(1, 1, 1)
-                    contour = ax_contour.contour(mesh_x, mesh_y, mesh_z, levels=24, cmap="turbo")
-                    ax_contour.set_facecolor("#10141f")
-                    ax_contour.clabel(contour, inline=True, fontsize=8, colors="#dce6f5")
-                    ax_contour.plot(
-                        x_vals,
-                        y_vals,
-                        marker="o",
-                        color="#ffffff",
-                        linewidth=3.1,
-                        markersize=4.5,
-                        markerfacecolor="#ff4f87",
-                        markeredgewidth=0.0,
-                        zorder=3,
-                    )
-                    ax_contour.scatter([x_vals[0]], [y_vals[0]], color="#2da3ff", s=100, label="Старт", zorder=4)
-                    ax_contour.scatter([x_vals[-1]], [y_vals[-1]], color="#57d773", s=100, label="Финиш", zorder=4)
-                    ax_contour.set_title("Линии уровня + траектория")
-                    ax_contour.set_xlabel("x1")
-                    ax_contour.set_ylabel("x2")
-                    ax_contour.set_aspect("equal", adjustable="box")
-                    ax_contour.grid(True)
-                    legend = ax_contour.legend(loc="upper right", framealpha=0.92)
-                    for text in legend.get_texts():
-                        text.set_color("#e8f0ff")
-
-                figure.savefig(output_path, dpi=120, bbox_inches="tight")
-            finally:
-                figure.clf()
-
-    def _evaluate_mesh(self, batch_result: BatchResult, mesh_x: np.ndarray, mesh_y: np.ndarray) -> np.ndarray:
-        polynomial = batch_result.polynomial
-        result = np.zeros_like(mesh_x, dtype=float)
-        for i, row in enumerate(polynomial.coefficients):
-            x_part = np.power(mesh_x, i)
-            for j, coefficient in enumerate(row):
-                if coefficient == 0.0:
-                    continue
-                result += coefficient * x_part * np.power(mesh_y, j)
-        return result
 
     @staticmethod
     def _build_surface_mesh(mesh_z: np.ndarray) -> np.ndarray:

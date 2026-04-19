@@ -19,7 +19,7 @@
 ## Структура пакета
 
 - `lr1/domain/` — доменные модели, шаблоны функций, численные методы.
-- `lr1/application/` — валидация входа, use-case сценарии, подготовка view-model.
+- `lr1/application/` — валидация входа, use-case сценарии, сборка данных для UI.
 - `lr1/ui/` — окно, вкладки, фоновые задачи, построение графиков.
 - `lr1/infrastructure/` — конфигурация и логирование.
 - `lr1/main.py`, `lr1/__main__.py` — точки входа.
@@ -28,7 +28,7 @@
 
 - Python `3.10+`.
 - `pip`.
-- зависимости из общего файла [`requirements.txt`](../requirements.txt).
+- основной путь установки: `python3 -m pip install -e .[test]`; [`requirements.txt`](../requirements.txt) остаётся зеркалом runtime-зависимостей для bootstrap-подсказок.
 
 ## Установка
 
@@ -36,7 +36,7 @@
 cd optimmethods
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install -r requirements.txt
+python3 -m pip install -e .[test]
 ```
 
 ## Запуск
@@ -44,7 +44,7 @@ python -m pip install -r requirements.txt
 ```bash
 cd optimmethods
 source .venv/bin/activate
-python -m lr1
+python3 -m lr1
 ```
 
 ## Использование
@@ -66,8 +66,7 @@ python -m lr1
 ## Проверки
 
 ```bash
-tox -c lr1/tox.ini -e test
-tox -c lr1/tox.ini -e lint
+python -m pytest -q lr1/tests
 ```
 
 Лог рантайма пишется в `lr1/infrastructure/logs/lr1_debug.log`.

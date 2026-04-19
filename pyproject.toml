@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "optimmethods"
+version = "0.1.0"
+description = "Учебные лабораторные по методам оптимизации"
+requires-python = ">=3.10"
+dependencies = [
+    "matplotlib>=3.10,<4",
+    "numpy>=2,<3",
+    "PySide6>=6.8,<7",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8,<9"]
+
+[tool.setuptools]
+include-package-data = false
+
+[tool.setuptools.packages.find]
+include = ["lr1*", "lr2*", "lr3*", "optim_core*"]
+
+[tool.pytest.ini_options]
+testpaths = ["lr1/tests", "lr2/tests", "lr3/tests", "optim_core/tests"]
+addopts = "-q"

@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 Vector = tuple[float, ...]
+
+BATCH_STATUS_SUCCESS = "success"
+BATCH_STATUS_DOMAIN_REFUSAL = "domain_refusal"
+BATCH_STATUS_UNEXPECTED_ERROR = "unexpected_error"
 
 
 @dataclass(frozen=True)
@@ -83,11 +87,65 @@ class SolverResult:
 
 
 @dataclass(frozen=True)
+class BatchItemResult:
+    """Результат одной комбинации `epsilon × start_point`."""
+
+    epsilon: float
+    start_point: Vector
+    status: str
+    run: SolverResult | None = None
+    message: str | None = None
+    exception_type: str | None = None
+
+
+@dataclass(frozen=True)
+class BatchSummary:
+    """Сводка batch-прогона."""
+
+    total_count: int
+    success_count: int
+    domain_refusal_count: int
+    unexpected_error_count: int
+
+
+@dataclass(frozen=True)
 class BatchResult:
     """Результат серии запусков для нескольких eps и стартовых точек."""
 
     polynomial: Polynomial2D
     runs: tuple[SolverResult, ...]
+    items: tuple[BatchItemResult, ...] = field(default_factory=tuple)
+    summary: BatchSummary | None = None
+
+    def __post_init__(self) -> None:
+        if self.summary is not None:
+            return
+
+        if self.items:
+            total_count = len(self.items)
+            success_count = sum(1 for item in self.items if item.status == BATCH_STATUS_SUCCESS)
+            domain_refusal_count = sum(
+                1 for item in self.items if item.status == BATCH_STATUS_DOMAIN_REFUSAL
+            )
+            unexpected_error_count = sum(
+                1 for item in self.items if item.status == BATCH_STATUS_UNEXPECTED_ERROR
+            )
+        else:
+            total_count = len(self.runs)
+            success_count = len(self.runs)
+            domain_refusal_count = 0
+            unexpected_error_count = 0
+
+        object.__setattr__(
+            self,
+            "summary",
+            BatchSummary(
+                total_count=total_count,
+                success_count=success_count,
+                domain_refusal_count=domain_refusal_count,
+                unexpected_error_count=unexpected_error_count,
+            ),
+        )
 
 
 def normalize_coefficients(matrix: Sequence[Sequence[float]]) -> tuple[tuple[float, ...], ...]:

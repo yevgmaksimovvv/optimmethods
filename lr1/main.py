@@ -21,7 +21,7 @@ def main() -> None:
     run_gui_entry(
         GuiEntryPointSpec(
             gui_import_path="lr1.ui.window:main",
-            requirements_hint_path="optimmethods/requirements.txt",
+            requirements_hint_path="requirements.txt",
             logger_name="lr1.entry",
         )
     )
