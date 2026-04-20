@@ -20,8 +20,8 @@ test = ["pytest>=8,<9"]
 include-package-data = false
 
 [tool.setuptools.packages.find]
-include = ["lr1*", "lr2*", "lr3*", "optim_core*"]
+include = ["lr1*", "lr2*", "lr3*", "lr5*", "optim_core*"]
 
 [tool.pytest.ini_options]
-testpaths = ["lr1/tests", "lr2/tests", "lr3/tests", "optim_core/tests"]
+testpaths = ["lr1/tests", "lr2/tests", "lr3/tests", "lr5/tests", "optim_core/tests"]
 addopts = "-q"

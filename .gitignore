@@ -206,7 +206,7 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 AGENTS.md
-report/lr2_runs/*
 .DS_Store
 lr1/infrastructure/logs/*
 .serena/*
+report/*

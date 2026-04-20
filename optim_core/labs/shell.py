@@ -1,4 +1,4 @@
-"""Единый GUI-shell для трёх встроенных лабораторных работ."""
+"""Единый GUI-shell для встроенных лабораторных работ."""
 
 from __future__ import annotations
 
@@ -93,6 +93,12 @@ def _build_lr3_window() -> QMainWindow:
     return GradientMethodsWindow()
 
 
+def _build_lr5_window() -> QMainWindow:
+    from lr5.ui.window import BarrierWindow
+
+    return BarrierWindow()
+
+
 DEFAULT_LABS: tuple[_LabSpec, ...] = (
     _LabSpec(
         lab_id="lr1",
@@ -114,6 +120,13 @@ DEFAULT_LABS: tuple[_LabSpec, ...] = (
         description="Градиентные методы",
         window_factory=_build_lr3_window,
         standalone_module="lr3",
+    ),
+    _LabSpec(
+        lab_id="lr5",
+        title="ЛР5",
+        description="Метод барьерных функций",
+        window_factory=_build_lr5_window,
+        standalone_module="lr5",
     ),
 )
 
